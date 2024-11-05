@@ -1,0 +1,59 @@
+---
+title: "Explore GTFS Data"
+format: html
+---
+
+```{r libraries}
+library(here)
+library(tidyverse)
+library(tidytransit)
+```
+# Read GTFS Feed
+
+Use TidyTransit to read LA Metro's GTFS data from: https://gitlab.com/LACMTA/gtfs_rail/raw/master/gtfs_rail.zip?1729758603.3193846
+
+```{r}
+la_metro = read_gtfs(here("data", "gtfs_rail.zip"))#"https://gitlab.com/LACMTA/gtfs_rail/raw/master/gtfs_rail.zip")
+
+summary(la_metro)
+```
+
+Routes
+
+```{r}
+head(la_metro$routes)
+```
+
+Stops
+
+```{r}
+head(la_metro$stops)
+```
+
+Stop Times
+
+```{r}
+head(la_metro$stop_times)
+```
+
+Trips
+
+```{r}
+head(la_metro$trips)
+```
+
+```{r}
+la_metro_shapes = gtfs_as_sf(la_metro)
+
+summary(la_metro_shapes)
+```
+
+```{r}
+ggplot(la_metro_shapes$shapes) +
+  geom_sf() +
+  theme_minimal()
+```
+```{r}
+la_metro_shapes$stops |> glimpse()
+```
+

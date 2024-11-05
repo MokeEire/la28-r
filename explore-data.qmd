@@ -1,0 +1,31 @@
+---
+title: "Explore Data"
+format: html
+---
+
+
+
+```{r}
+library(tidyverse)
+library(here)
+```
+
+# Data
+## CalTrans Traffic Data
+
+```{r}
+traffic_volume_file = here("data", "Traffic_Volumes_AADT.csv")
+
+traffic_volume = read_csv(traffic_volume_file)
+
+```
+
+```{r}
+glimpse(traffic_volume)
+```
+## Routes 
+
+```{r}
+
+```
+
