@@ -4,11 +4,15 @@ library(here)
 library(tidyverse)
 library(tidygeocoder)
 library(janitor)
+library(googlesheets4)
 
 # Load Data ---------------------------------------------------------------
 
-venues = read_csv(here("data", "venues.csv")) |> 
+venues_drive_link = "https://docs.google.com/spreadsheets/d/18_P4igWVdnWZpbXPb7ZHEw6vscrD8gNAeu0BfDXmE4k/edit?gid=0#gid=0"
+venues = read_sheet(venues_drive_link) |> 
   clean_names()
+# venues = read_csv(here("data", "venues.csv")) |> 
+#   clean_names()
 
 glimpse(venues)
 
