@@ -4,13 +4,16 @@ library(here)
 library(tidyverse)
 library(sf)
 library(tidytransit)
+library(geojsonio)
 
 # Load Data ---------------------------------------------------------------
 
 # Load venues
 
-(venues = read_csv(here("data", "la_venues_geo.csv"))) |>
-  glimpse()
+# (venues = read_csv(here("data", "la_venues_geo.csv"))) |>
+#   glimpse()
+venues = read_rds(here("data", "la_venues_geo.rds"))
+glimpse(venues)
 
 (venues_sf = st_as_sf(venues, coords = c("longitude", "latitude"), crs="EPSG:4326", sf_column_name = "venue_geometry")) |> 
   glimpse()
@@ -34,6 +37,8 @@ la_bus = read_gtfs("https://gitlab.com/LACMTA/gtfs_bus/raw/master/gtfs_bus.zip")
   glimpse()
 
 bus_stops = la_bus_sf$stops
+
+# https://metrolinktrains.com/about/gtfs/
 
 # Calculate Distance ------------------------------------------------------
 
@@ -117,26 +122,34 @@ add_nearby_stops = function(df, rail_stops_df, within_distance = 1000){
          stops_within_1km = list(stop_distances))
 }
 
-add_routes = function(df, stop_times){
-  routes = distinct(stop_times, stop_id, route_code)
+# For each nearby stop, what routes are available?
+add_routes = function(df, gtfs_data){
+  routes = distinct(gtfs_data$stop_times, stop_id, route_code)
   
   stops_within = unnest(df, stops_within_1km)
-  browser()
-  routes_within = stops_within |> left_join(routes, by = "stop_id")
+  
+  routes_within = stops_within |> 
+    left_join(routes, by = "stop_id") |> 
+    inner_join(gtfs_data$routes, by = c("route_code" = "route_long_name")) |> 
+    distinct(route_code, route_id, route_type, route_color, route_text_color, route_url)
+  
+  mutate(df, routes = list(routes_within))
 }
 
 # Split venues into list of rows
 venues_split = venues_sf |> 
   split(venues_sf$venue)
 
-venues_split |> 
+venues_complete = venues_split |> 
   map(\(venue) as_tibble(add_nearby_stops(venue, rail_stops_only))) |> 
-  map(\(venue) as_tibble(add_routes(venue, la_rail$stop_times))) |> 
+  map(\(venue) as_tibble(add_routes(venue, la_rail))) |> 
   list_rbind()
 
 
 
-# Write to JSON -----------------------------------------------------------
+# Write -----------------------------------------------------------
 
-
-
+# To RDS
+venues_complete |> write_rds(here("data", "venues_complete.rds"))
+# To JSON
+jsonlite::toJSON(venues_complete) |> write_lines(here("data", "venues_complete.json"))
