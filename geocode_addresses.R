@@ -10,7 +10,10 @@ library(googlesheets4)
 
 venues_drive_link = "https://docs.google.com/spreadsheets/d/18_P4igWVdnWZpbXPb7ZHEw6vscrD8gNAeu0BfDXmE4k/edit?gid=0#gid=0"
 venues = read_sheet(venues_drive_link) |> 
-  clean_names()
+  clean_names() |> 
+  # Separate sources into list column
+  mutate(sources = str_split(source_s, ";\\\n"))
+
 # venues = read_csv(here("data", "venues.csv")) |> 
 #   clean_names()
 
@@ -40,3 +43,4 @@ la_venues_geo |>
 # Output ------------------------------------------------------------------
 
 write_csv(la_venues_geo, here("data", "la_venues_geo.csv"))
+write_rds(la_venues_geo, here("data", "la_venues_geo.rds"))
