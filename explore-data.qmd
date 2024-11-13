@@ -11,21 +11,29 @@ library(here)
 ```
 
 # Data
-## CalTrans Traffic Data
+## Venues
 
 ```{r}
-traffic_volume_file = here("data", "Traffic_Volumes_AADT.csv")
+venues = read_rds(here("data", "venues_complete.rds"))
 
-traffic_volume = read_csv(traffic_volume_file)
+glimpse(venues)
 
 ```
+How close is the nearest Rail Stop?
 
 ```{r}
-glimpse(traffic_volume)
+venues |> 
+  unnest(nearest_stop) |> 
+  select(venue, stop_name, distance) |> 
+  arrange(distance)
 ```
-## Routes 
+
+How many routes are accessible to each venue?
 
 ```{r}
-
+venues |> 
+  unnest(routes) |> 
+  count(venue, name = "routes", sort=T)
 ```
+
 
