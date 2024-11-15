@@ -1,23 +1,27 @@
 ---
-title: "Explore Data"
+title: "How Will Los Angeles Pull Off A \"Car-Free\" Olympics? in 2028"
 format: html
 ---
 
+How much time do you want to spend getting from A to B? If you’re given the choice of spending 25 minutes, or an hour and 10 minutes to get to the same place, which will you choose? This is the unfortunate trade-off that you make if you consider taking public transit in Los Angeles. 
 
+Imagine you’re in downtown Los Angeles and you want to go to SoFi stadium - one of the city’s big new concert venues. The good news is that you’re in one of the best places to get the metro in the city, the bad news is that it is still going to take 2-3 times longer than driving. You could take the J line for 24 minutes from 1st St station to Manchester/Harbor Freeway, then get 115 bus for 19 minutes down Manchester, and then you’re a 13 minute walk away from the stadium (this is at 11:45AM on a Monday). Alternatively, you could hop in your car and you would be there in 25 minutes.
+
+This is the problem that many Angelenos have with using public transport in the city. It takes too long and often requires walking down streets that barely have sidewalks. And it’s why the “car-free” olympics claim is so frustrating. Yes, a car-free olympics is possible just like I can walk up and down California on the John Muir trail - that doesn’t mean it’s realistic or efficient. 
+
+What are the transit gaps Metro needs to solve? What needs to change? And what is Metro planning for 2028?
 
 ```{r}
 library(tidyverse)
 library(here)
+library(mapgl)
 ```
 
-# Data
-## Venues
+# Transit Gaps
+## Isolated Venues
 
 ```{r}
 venues = read_rds(here("data", "venues_complete.rds"))
-
-glimpse(venues)
-
 ```
 How close is the nearest Rail Stop?
 
@@ -27,6 +31,17 @@ venues |>
   select(venue, stop_name, distance) |> 
   arrange(distance)
 ```
+
+```{r}
+mapboxgl(
+  style = mapbox_style("standard"),
+  center=c(-118.25, 34.01),
+	zoom=8.94,
+	minZoom=8.94
+) |>
+  add_markers(data = st_sf(venues), popup = "venue")
+```
+
 
 How many routes are accessible to each venue?
 
