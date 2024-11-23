@@ -1,0 +1,152 @@
+---
+title: "Transit is too far"
+format: html
+---
+
+```{r setup}
+library(tidyverse)
+library(here)
+library(sf)
+library(tidytransit)
+```
+
+
+## Question
+
+What % of the Los Angeles population lives within 1km of a rail station?
+
+## Data
+
+- Los Angeles population
+- Los Angeles rail stations
+
+### Los Angeles population
+
+
+```{r}
+nhgis_file = here("data", "nhgis", "nhgis0001_ds258_2020_tract.csv")
+
+nhgis = read_csv(nhgis_file)
+
+lapop2020 = nhgis |> 
+  filter(STATE == "California", COUNTY == "Los Angeles County") |> 
+  select(GISJOIN, YEAR, TRACTA, POPULATION = U7H001)
+
+glimpse(lapop2020)
+```
+
+```{r}
+nhgis_shp_file = here("data", "nhgis", "US_tract_2020.shp")
+
+nhgis_shp = st_read(nhgis_shp_file) |> 
+  # Reproject CRS to WGS84
+  st_transform(crs = "EPSG:4326")
+
+glimpse(nhgis_shp)
+```
+
+
+
+
+```{r}
+lapop2020_shp = inner_join(lapop2020, nhgis_shp, by = "GISJOIN")
+
+lapop2020_shp |> 
+  ggplot()+
+  geom_sf(aes(geometry = geometry, fill = POPULATION), colour = NA)+
+  scale_fill_continuous(low = "white", high = "blue")+
+  theme_void()
+```
+
+There's not really a great way to subset Los Angeles to an "LA Proper", but here's what I did:
+1. Removed Catalina, island tracts, Angeles forest
+2. Removed tracts north of 34.35 latitude (basically anything above Santa Clarita)
+
+```{r}
+exclude_tracts = tribble(
+  ~TRACTCE,
+  "599100",
+  "599000",
+  "930400"
+)
+
+lapop2020_shp_subset = lapop2020_shp |> 
+  anti_join(exclude_tracts, by = "TRACTCE") |> 
+  filter(st_coordinates(st_centroid(geometry))[,2] < 34.35) |> 
+  st_as_sf()
+
+lapop2020_shp_subset |> 
+  ggplot()+
+  geom_sf(aes(geometry = geometry, fill = POPULATION))+
+  scale_fill_continuous(low = "white", high = "blue")+
+  theme_void()
+```
+
+What is the total population of this "LA proper" subset?
+
+```{r}
+lapop2020_shp_subset |> 
+  summarise(total_pop = scales::comma(sum(POPULATION)))
+```
+
+
+### Los Angeles rail stations
+
+Load Metro's GTFS data
+
+```{r}
+metro_rail_gtfs = read_gtfs("https://gitlab.com/LACMTA/gtfs_rail/raw/master/gtfs_rail.zip")
+
+# Convert to SF
+metro_rail_sf = gtfs_as_sf(metro_rail_gtfs)
+
+metro_rail_stops = metro_rail_sf$stops |> 
+  filter(location_type == 0)
+
+metro_rail_stops |> 
+  ggplot()+
+  geom_sf(aes(geometry = geometry))+
+  theme_void()
+```
+Make a 1km buffer around the stops
+
+```{r}
+metro_rail_stops_buffer = metro_rail_stops |> 
+  st_buffer(1000)
+
+
+
+ggplot()+
+  geom_sf(data = metro_rail_stops, aes(geometry = geometry))+
+  geom_sf(data = metro_rail_stops_buffer, aes(geometry = geometry), fill = "blue", alpha = 0.5)+
+  theme_void()
+```
+
+Now join this buffer to the LA population data
+
+```{r}
+st_join(metro_rail_stops_buffer, lapop2020_shp_subset)
+
+lapop2020_filter = st_filter(lapop2020_shp_subset, metro_rail_stops_buffer)
+
+ggplot()+
+  geom_sf(data = lapop2020_filter, (aes(geometry = geometry, fill = POPULATION)))+
+  scale_fill_continuous(low = "white", high = "blue")+
+  theme_void()
+
+lapop2020_filter|> 
+  summarise(across(POPULATION, sum)) |> 
+  ggplot()+
+  geom_sf(data = lapop2020_shp_subset, aes(geometry = geometry, fill = POPULATION))+
+  geom_sf(aes(geometry = geometry), fill = "RED", alpha = .5)+
+  scale_fill_continuous(low = "white", high = "blue")+
+  theme_void()
+```
+
+What's the % population that lives within 1km of a rail station?
+
+```{r}
+(sum(lapop2020_filter$POPULATION) / sum(lapop2020_shp_subset$POPULATION)) |> 
+  scales::percent()
+```
+
