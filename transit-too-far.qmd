@@ -24,6 +24,7 @@ What % of the Los Angeles population lives within 1km of a rail station?
 
 
 ```{r}
+# 2020 population by census tract from: https://www.nhgis.org/
 nhgis_file = here("data", "nhgis", "nhgis0001_ds258_2020_tract.csv")
 
 nhgis = read_csv(nhgis_file)
