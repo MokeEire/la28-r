@@ -1,0 +1,22 @@
+---
+title: "Traveltime API"
+format: html
+---
+
+Documentation:
+
+- [Github](https://github.com/traveltime-dev/traveltime-sdk-r)
+- [Routes](https://playground.traveltime.com/routes)
+- [Isochrones](https://docs.traveltime.com/api/overview/isochrones)
+
+# Plan
+
+1. Generate Isochrones around each venue for accessing the venue via car and via public transport
+2. Using Census tracts in Los Angeles, generate routes (and the durations) for each tract to each venue
+
+```{r setup}
+library(here)
+library(tidyverse)
+library(traveltimeR)
+```
+
