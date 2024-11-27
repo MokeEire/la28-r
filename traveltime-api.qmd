@@ -204,6 +204,7 @@ result_points |>
     # sf::st_cast("POLYGON") |>
     dplyr::select(-INT) |> plot()
 ```
+## Fast API endpoint
 
 
 Write a function to wrap around the API call
@@ -265,7 +266,6 @@ I will want to modify the following parameters:
 It seems the fast Isochrone endpoint can't support driving requests.
 I can use the regular endpoint for driving requests and fast endpoint for public transport requests.
 
-## Public Transport
 
 ```{r}
 
@@ -316,7 +316,7 @@ Looking at directions from Beach Pizza to Arena Downtown (AKA: LA Live), I canno
 Does the isochrone from the full API look any different? 
 First, I'll need to write another function and a new set of arrival searches.
 
-### `time_map_sf()`
+## Regular API endpoint
 
 ```{r}
 time_map_sf = function(arrival){
@@ -493,6 +493,7 @@ venues_isochrones_df |>
 ```
 
 ```{r}
+show_time_of_day = function(date) stamp("8am on Tuesday", orders = "%I%p %A")(date)
 # map isochrones function
 map_isochrones = function(data){
   ggplot(data)+
@@ -500,72 +501,46 @@ map_isochrones = function(data){
     geom_sf(data = lapop2020_shp_subset, aes(geometry = geometry, fill = POPULATION), colour = NA)+
   # Public transport Isochrone
     geom_sf(aes(geometry = geometry), fill = "red", alpha = 0.5)+
+    geom_sf(aes(geometry = venue_geometry), colour = "black", size = 1.5)+
   # Venue point
     # geom_sf(aes(geometry = venue_geometry), colour = "black")+
     scale_fill_continuous(low = "white", high = "blue")+
     labs(title = unique(data$venue))+
   facet_grid(rows = vars(arrival_time), cols = vars(transportation), 
-             labeller = labeller(arrival_time = stamp_time("8am on Tuesday"), transportation = str_to_title))+
+             labeller = labeller(transportation = str_to_title))+
     theme_void()
 }
 
+
 venues_isochrones_df |> 
-  split(venues_isochrones_df$venue) |> 
+  left_join(select(venues, venue, venue_geometry), by = "venue") |>
+  split(venues_isochrones_df$venue) |> # pluck(1) |> map_isochrones() # Test one
   map(map_isochrones)
 ```
 
+With isochrones for each venue, we can see which venues are harder to reach by public transit.
+Next steps might include:
 
+- creating isochrones for 30 mins, 45 mins, 1.5hrs, 2hrs?
+- including weekdays other than Tuesday and weekends
 
-```{r}
-lapop2020_shp_subset |> 
-  ggplot()+
-  geom_sf(aes(geometry = geometry, fill = POPULATION), colour = NA)+
-  geom_sf(data = list_rbind(venues_isochrones, names_to = "id"), aes(geometry = geometry), fill = "red", alpha = 0.5)+
-  scale_fill_continuous(low = "white", high = "blue")+
-  theme_void()
-```
+# Routes
 
+Another way to identify areas with poor transit coverage, particularly as it relates to the Olympic venues, is to measure the travel times to each venue from all around Los Angeles.
+I tested this out with the Google Maps API and it seemed to work quite well.
 
-```{r}
-venues_iso_locations = venues_iso |> 
-  mutate(venue_locations = make_location(id = venue, coords = list(lat = latitude, lng = longitude)))
-```
+The plan is to calculate the centroid of each census tract in the "proper" LA subset I created and measure the distance/travel time to each venue using [TravelTime's Routes API](https://docs.traveltime.com/api/reference/routes).
 
-```{r}
-arrival_search <-
-make_search(id = "public transport to Trafalgar Square",
-            travel_time = 900,
-            coords = list(lat = 51.507609, lng = -0.128315),
-            arrival_time_period = "weekday_morning",
-            transportation = list(type = "public_transport"))
+Similar to the Isochrone API request, I need to use the `make_search()` function and provide:
 
-# Function i want to map
-sample_func <- function(method = "public_transport", venue, coords, time_period = "weekday_morning"){
-  
-  make_search(
-    id = str_c(method, " to ", venue),
-    travel_time = 900,
-    coords = list(lat = coords[2], lng = coords[1]),
-    arrival_time_period = "weekday_morning",
-    transportation = list(type = method)
-  )
-}
-
-glimpse(venues_iso)
-```
+- departure location
+- arrival location
+- arrival/departure time
+- transportation type
+- a list of properties to return (`travel_time`, `distance`, `route`, `fares`)
 
 
 
-```{r}
-
-departure_search <-
-  make_search(id = "departure search example",
-              departure_location_id = "London center",
-              arrival_location_ids = list("Hyde Park", "ZSL London Zoo"),
-              departure_time = strftime(as.POSIXlt(Sys.time(), "UTC"), "%Y-%m-%dT%H:%M:%SZ"),
-              properties = list("travel_time", "distance", "route"),
-              transportation = list(type = "driving"))
-```
 
 
 
