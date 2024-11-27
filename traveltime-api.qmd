@@ -473,6 +473,8 @@ venues_isochrones_df = list_rbind(venues_isochrones_full) |>
   summarise(geometry = st_union(geometry), .groups = "drop")
 
 glimpse(venues_isochrones_df)
+
+# saveRDS(venues_isochrones_df, here("data", "venues_isochrones.rds"))
 ```
 
 ```{r}
