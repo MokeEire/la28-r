@@ -17,6 +17,556 @@ Documentation:
 ```{r setup}
 library(here)
 library(tidyverse)
+library(sf)
 library(traveltimeR)
+library(jsonlite)
 ```
+
+# Data
+
+## Venues
+
+```{r}
+venues = read_rds(here("data", "venues_complete.rds"))
+```
+
+## Census Tracts
+
+
+```{r}
+nhgis_file = here("data", "nhgis", "nhgis0001_ds258_2020_tract.csv")
+
+nhgis = read_csv(nhgis_file)
+
+lapop2020 = nhgis |> 
+  filter(STATE == "California", COUNTY == "Los Angeles County") |> 
+  select(GISJOIN, YEAR, TRACTA, POPULATION = U7H001)
+
+nhgis_shp_file = here("data", "nhgis", "US_tract_2020.shp")
+
+nhgis_shp = st_read(nhgis_shp_file) |> 
+  # Reproject CRS to WGS84
+  st_transform(crs = "EPSG:4326")
+
+```
+
+Create an opinionated subset of Los Angeles tracts that make up the area of LA where transportation to venues is relevant.
+
+Exclude Catalina Island (tract 5991) and the area north of the San Gabriel Mountains (tract 9304).
+Also exclude tracts that are north of the 34.35 latitude: functionally Santa Clarita and above.
+
+```{r}
+lapop2020_shp = inner_join(lapop2020, nhgis_shp, by = "GISJOIN")
+
+exclude_tracts = tribble(
+  ~TRACTCE,
+  "599100",
+  "599000",
+  "930400"
+)
+
+lapop2020_shp_subset = lapop2020_shp |> 
+  anti_join(exclude_tracts, by = "TRACTCE") |> 
+  filter(st_coordinates(st_centroid(geometry))[,2] < 34.35) |> 
+  st_as_sf()
+```
+
+# Isochrones
+
+[Example on GitHub](https://github.com/traveltime-dev/traveltime-sdk-r?tab=readme-ov-file#isochrones-time-map)
+
+```{r}
+dateTime <- strftime(as.POSIXlt(Sys.time(), "UTC"), "%Y-%m-%dT%H:%M:%SZ")
+
+departure_search <-
+  make_search(id = "public transport from Trafalgar Square",
+              coords = list(lat = 51.507609, lng = -0.128315),
+              departure_time = dateTime,
+              travel_time = 900,
+              transportation = list(type = "public_transport"),
+              properties = list('is_only_walking'))
+
+arrival_search <-
+  make_search(id = "public transport to Trafalgar Square",
+              coords = list(lat = 51.507609, lng = -0.128315),
+              arrival_time = dateTime,
+              travel_time = 900,
+              transportation = list(type = "public_transport"),
+              range = list(enabled = TRUE, width = 3600))
+
+result <-
+  time_map(
+    departure_searches = departure_search,
+    arrival_searches = arrival_search
+  )
+
+# print(result)
+
+```
+
+```{r}
+arrival_search <-
+make_search(id = "public transport to Trafalgar Square",
+            travel_time = 900,
+            coords = list(lat = 51.507609, lng = -0.128315),
+            arrival_time_period = "weekday_morning",
+            transportation = list(type = "public_transport"))
+
+fast_result <-
+time_map_fast(
+  arrival_many_to_one = arrival_search
+)
+
+# print(result)
+```
+
+
+How to use the result?
+
+```{r}
+str(result, max.level = 2)
+```
+
+
+Based on an old API wrapper package, here's how to convert the response to an SF object:
+
+- https://tlorusso.github.io/traveltime/vignette.html#taking-a-glimpse-at-the-isochrones-mapview
+- https://github.com/tlorusso/traveltime
+
+```{r}
+flat <- c(1:length(fast_result$contentParsed$results[[1]]$shapes)) %>%
+    purrr::map_dfr(., ~dplyr::bind_rows(fast_result$contentParsed$results[[1]]$shapes[[.x]]$shell),.id="group")
+
+flat_points = sf::st_as_sf(x = flat,
+                 coords = c("lng", "lat"),
+                 crs = "+proj=longlat +datum=WGS84")
+
+flat_points %>%
+    dplyr::mutate(ID=dplyr::row_number()) %>%
+    dplyr::group_by(group) %>%
+    dplyr::arrange(ID) %>%
+    dplyr::summarize(INT = dplyr::first(ID), do_union = FALSE) %>%
+    sf::st_cast("POLYGON") %>%
+    dplyr::select(-INT)
+```
+
+What's it doing?
+
+1. Counting the items in the shapes object
+
+```{r}
+result_shapes = fast_result$contentParsed$results[[1]]$shapes
+
+fast_result$contentParsed$results |> 
+  str(max.level=4)
+```
+
+2. Binding the rows from each shape's "shell" together
+
+```{r}
+result_shell = modify(result_shapes, "shell") |> 
+  modify_depth(.depth = 2, as_tibble) |> 
+  map(list_rbind) |> 
+  list_rbind(names_to = "group")
+
+modify(result_shapes, "shell") |> 
+  modify_depth(.depth = 2, as_tibble) |>
+  map(list_rbind) |> 
+  list_rbind(names_to = "group") |> 
+  str(max.level=3)
+```
+
+3. Converting the data to an sf object
+
+```{r}
+result_points = sf::st_as_sf(x = result_shell,
+                 coords = c("lng", "lat"),
+                 crs = "EPSG:4326")
+
+sf::st_as_sf(x = result_shell,
+                 coords = c("lng", "lat"),
+                 crs = "EPSG:4326")
+```
+
+4. Sorting each shell using a row number
+5. Summarizing the data to get the first row number for each group
+6. Casting the data to a polygon
+7. Removing the intermediate row number
+
+```{r}
+result_points |> 
+    dplyr::mutate(ID=dplyr::row_number()) |> 
+    dplyr::group_by(group) |> 
+    dplyr::arrange(ID) |> 
+    summarise(INT = dplyr::first(ID),
+              geometry = st_cast(st_combine(geometry), "POLYGON"), .groups = "drop") |>
+    # dplyr::summarize(INT = dplyr::first(ID), do_union = FALSE) |>
+    # sf::st_cast("POLYGON") |>
+    dplyr::select(-INT) |> plot()
+```
+
+
+Write a function to wrap around the API call
+
+```{r}
+# Output to emulate
+time_map_fast(
+  arrival_many_to_one = arrival_search,
+  format = "geo+json"
+)
+
+time_map_fast_sf = function(arrival){
+  arrival_df = list_rbind(arrival)
+  # Call the API
+  time_map_result = time_map_fast(
+    arrival_many_to_one = arrival,
+  format = "geo+json"
+    )
+  
+  result_shapes = time_map_result$contentParsed$results[[1]]$shapes
+  
+  result_shell = modify(result_shapes, "shell") |> 
+    modify_depth(.depth = 2, as_tibble) |> 
+    map(list_rbind) |> 
+    list_rbind(names_to = "group")
+
+  result_points = sf::st_as_sf(x = result_shell,
+                               coords = c("lng", "lat"),
+                               crs = "+proj=longlat +datum=WGS84") #"EPSG:4326"
+  
+  result_points |> 
+    dplyr::mutate(ID=dplyr::row_number()) |> 
+    dplyr::group_by(group) |> 
+    dplyr::arrange(ID) |> 
+    summarise(
+      INT = dplyr::first(ID),
+      geometry = st_cast(st_combine(geometry), "POLYGON"), 
+      .groups = "drop"
+      ) |> 
+    # dplyr::summarize(INT = dplyr::first(ID), do_union = FALSE) |> 
+    #   sf::st_cast("POLYGON") |> 
+    dplyr::select(-INT) |> 
+    mutate(venue = arrival_df$id,
+           travel_time = arrival_df$travel_time,
+           arrival_time_period = arrival_df$arrival_time_period,
+           transportation = arrival_df$transportation$type,
+           .before = "group")
+}
+
+time_map_fast_sf(arrival_search)
+```
+
+Now I need to create the arrival search for each venue. 
+I will want to modify the following parameters:
+- different times of day. ([Can't do this](https://docs.traveltime.com/api/reference/isochrones-fast#arrival_searches-many_to_one-arrival_time_period), `weekday_morning` is the only option)
+- different modes of transport (car, public transport)
+- set the travel time to 1 hour (3600 seconds) and 2 hours (7200 seconds)
+
+It seems the fast Isochrone endpoint can't support driving requests.
+I can use the regular endpoint for driving requests and fast endpoint for public transport requests.
+
+## Public Transport
+
+```{r}
+
+venues_iso = venues |> 
+  # Only keep one venue per address
+  distinct(address, .keep_all = T) |> 
+  mutate(lat = st_coordinates(venue_geometry)[,2], 
+         lng = st_coordinates(venue_geometry)[,1],
+         coords = map2(lat, lng, \(lat, lng) list(lat = lat, lng = lng))) |>
+  select(id = venue, coords)
+
+venues_iso_list = list(
+  venues_iso$id, 
+  venues_iso$coords
+  ) |> 
+    pmap(\(venue, coords) make_search(id = venue, 
+                                      travel_time = 3600, 
+                                      arrival_time_period = "weekday_morning", 
+                                      coords = coords, 
+                                      transportation = list(type = "public_transport"),
+                                      level_of_detail = list(scale_type = "simple", level = "high")))
+```
+
+Test this for a single venue
+
+```{r}
+sample_venue = venues_iso_list[[1]]
+
+sample_isochrone = time_map_fast_sf(sample_venue)
+
+sample_isochrone |> 
+  inner_join(venues, by = "venue") |> 
+    ggplot()+
+  # Map of LA tracts
+    geom_sf(data = lapop2020_shp_subset, aes(geometry = geometry, fill = POPULATION), colour = NA)+
+  # Public transport Isochrone
+    geom_sf(aes(geometry = geometry), fill = "red", alpha = 0.5)+
+  # Venue point
+    geom_sf(aes(geometry = venue_geometry), colour = "black")+
+    scale_fill_continuous(low = "white", high = "blue")+
+    theme_void()
+```
+
+This isochrone is a little generous. Within this Isochrone is Westchester, a place I used to live.
+Take Beach Pizza on Manchester and Lincoln for example: Beach Pizza, 8601 Lincoln Blvd #150, Westchester, CA 90045
+Looking at directions from Beach Pizza to Arena Downtown (AKA: LA Live), I cannot find a public transport route on a weekday morning that is less than 1 hour. It is often close, but always more than an hour.
+
+Does the isochrone from the full API look any different? 
+First, I'll need to write another function and a new set of arrival searches.
+
+### `time_map_sf()`
+
+```{r}
+time_map_sf = function(arrival){
+  Sys.sleep(1)
+  arrival_df = list_rbind(arrival) |> 
+    unnest_wider(transportation, names_sep = "_")
+  # Call the API
+  time_map_result = time_map(
+    arrival_searches = arrival,
+    format = "geo+json"
+    )
+  
+  result_shapes = time_map_result$contentParsed$results[[1]]$shapes
+  
+  result_shell = modify(result_shapes, "shell") |> 
+    modify_depth(.depth = 2, as_tibble) |> 
+    map(list_rbind) |> 
+    list_rbind(names_to = "group")
+
+  result_points = sf::st_as_sf(x = result_shell,
+                               coords = c("lng", "lat"),
+                               crs = "EPSG:4326") #"+proj=longlat +datum=WGS84"
+  
+  result_sum = result_points |> 
+    dplyr::mutate(ID=dplyr::row_number()) |> 
+    dplyr::group_by(group) |> 
+    dplyr::arrange(ID) |> 
+    summarise(
+      INT = dplyr::first(ID),
+      geometry = st_cast(st_combine(geometry), "POLYGON"), 
+      .groups = "drop"
+      ) |> 
+    # dplyr::summarize(INT = dplyr::first(ID), do_union = FALSE) |> 
+    #   sf::st_cast("POLYGON") |> 
+    dplyr::select(-INT)
+  
+  if(arrival_df$transportation_type == "public_transport"){
+    mutate(result_sum,
+           id = arrival_df$id,
+           venue = str_extract(arrival_df$id, "(?<=to\\s).+"),
+           travel_time = arrival_df$travel_time,
+           arrival_time = arrival_df$arrival_time,
+           transportation = arrival_df$transportation_type,
+           walking_time = arrival_df$transportation_walking_time,
+           pt_change_delay = arrival_df$transportation_pt_change_delay,
+           .before = "group")
+  } else {
+    mutate(result_sum,
+           id = arrival_df$id,
+           venue = str_extract(arrival_df$id, "(?<=to\\s).+"),
+           travel_time = arrival_df$travel_time,
+           arrival_time = arrival_df$arrival_time,
+           transportation = arrival_df$transportation_type,
+           walking_time = NA_real_,
+           pt_change_delay = NA_real_,
+           .before = "group")
+  }
+    
+}
+```
+
+```{r}
+venues_iso_sample_list = list(
+  venues_iso$id, 
+  venues_iso$coords
+  ) |> 
+    pmap(\(venue, coords) make_search(id = venue, 
+                                      travel_time = 3600, 
+                                      arrival_time = "2024-12-03T09:00:00-08:00", 
+                                      coords = coords, 
+                                      transportation = list(type = "public_transport", 
+                                                            walking_time=20*60, 
+                                                            pt_change_delay = 120),
+                                      level_of_detail = list(scale_type = "simple", level = "medium")))
+```
+
+
+```{r}
+venues_isochrones_sample = map(venues_iso_sample_list, time_map_sf)
+
+list_rbind(venues_isochrones_sample, names_to = "id")
+```
+
+Test this for a single venue
+
+```{r}
+sample_venue_full = venues_isochrones_sample[[1]]
+
+sample_venue_full |> 
+  inner_join(venues, by = "venue") |> 
+    ggplot()+
+  # Map of LA tracts
+    geom_sf(data = lapop2020_shp_subset, aes(geometry = geometry, fill = POPULATION), colour = NA)+
+  # Public transport Isochrone
+    geom_sf(aes(geometry = geometry), fill = "red", alpha = 0.5)+
+  # Venue point
+    geom_sf(aes(geometry = venue_geometry), colour = "black")+
+    scale_fill_continuous(low = "white", high = "blue")+
+    theme_void()
+```
+
+This looks a little more realistic.
+
+Now, we want create isochrones for different times of day and for driving.
+
+Create 10 isochrones for each venue:
+
+- 5 times of day: 8am-8pm (every 3 hrs)
+- 2 modes of transport: public transport, driving
+
+```{r}
+times_of_day = str_c("2024-12-03T", c("08", "11", "14", "17", "20"), ":00:00-08:00")
+
+modes = c("public_transport", "driving")
+
+variations = list(
+  modes,
+  times_of_day
+)
+
+variations = expand_grid(venue = venues_iso$id, times_of_day, modes) |> 
+  left_join(venues_iso, by = c("venue" = "id"))
+
+variations
+```
+
+Use these variations to create the arrival searches
+
+```{r}
+venues_iso_full_list = list(
+  variations$venue, 
+  variations$coords,
+  variations$modes,
+  variations$times_of_day
+  ) |> 
+    pmap(\(venue, coords, mode, time) make_search(id = str_c(mode, " to ", venue), 
+                                      travel_time = 3600, 
+                                      arrival_time = time, 
+                                      coords = coords, 
+                                      transportation = list(type = mode, 
+                                                            walking_time=20*60, 
+                                                            pt_change_delay = 120),
+                                      level_of_detail = list(scale_type = "simple", level = "medium")))
+```
+
+
+```{r}
+venues_isochrones_full = map(venues_iso_full_list, time_map_sf)
+
+venues_isochrones_df = list_rbind(venues_isochrones_full) |> 
+  mutate(venue = str_remove_all(venue, "\\s?to\\s"),
+         arrival_time = ymd_hms(arrival_time, tz = "America/Los_Angeles")) |> 
+  group_by(id, venue, travel_time, arrival_time, transportation, walking_time, pt_change_delay) |>
+  summarise(geometry = st_union(geometry), .groups = "drop")
+
+glimpse(venues_isochrones_df)
+```
+
+```{r}
+list_rbind(venues_isochrones_full)
+
+venues_isochrones_df |> 
+  filter(venue == "Stadium Carson") |> 
+    ggplot()+
+  # Map of LA tracts
+    geom_sf(data = lapop2020_shp_subset, aes(geometry = geometry, fill = POPULATION), colour = NA)+
+  # Public transport Isochrone
+    geom_sf(aes(geometry = geometry), fill = "red", alpha = 0.5)+
+  # Venue point
+    # geom_sf(aes(geometry = venue_geometry), colour = "black")+
+    scale_fill_continuous(low = "white", high = "blue")+
+  facet_grid(rows = vars(arrival_time), cols = vars(transportation))+
+    theme_void()
+```
+
+```{r}
+# map isochrones function
+map_isochrones = function(data){
+  ggplot(data)+
+  # Map of LA tracts
+    geom_sf(data = lapop2020_shp_subset, aes(geometry = geometry, fill = POPULATION), colour = NA)+
+  # Public transport Isochrone
+    geom_sf(aes(geometry = geometry), fill = "red", alpha = 0.5)+
+  # Venue point
+    # geom_sf(aes(geometry = venue_geometry), colour = "black")+
+    scale_fill_continuous(low = "white", high = "blue")+
+    labs(title = unique(data$venue))+
+  facet_grid(rows = vars(arrival_time), cols = vars(transportation), 
+             labeller = labeller(arrival_time = stamp_time("8am on Tuesday"), transportation = str_to_title))+
+    theme_void()
+}
+
+venues_isochrones_df |> 
+  split(venues_isochrones_df$venue) |> 
+  map(map_isochrones)
+```
+
+
+
+```{r}
+lapop2020_shp_subset |> 
+  ggplot()+
+  geom_sf(aes(geometry = geometry, fill = POPULATION), colour = NA)+
+  geom_sf(data = list_rbind(venues_isochrones, names_to = "id"), aes(geometry = geometry), fill = "red", alpha = 0.5)+
+  scale_fill_continuous(low = "white", high = "blue")+
+  theme_void()
+```
+
+
+```{r}
+venues_iso_locations = venues_iso |> 
+  mutate(venue_locations = make_location(id = venue, coords = list(lat = latitude, lng = longitude)))
+```
+
+```{r}
+arrival_search <-
+make_search(id = "public transport to Trafalgar Square",
+            travel_time = 900,
+            coords = list(lat = 51.507609, lng = -0.128315),
+            arrival_time_period = "weekday_morning",
+            transportation = list(type = "public_transport"))
+
+# Function i want to map
+sample_func <- function(method = "public_transport", venue, coords, time_period = "weekday_morning"){
+  
+  make_search(
+    id = str_c(method, " to ", venue),
+    travel_time = 900,
+    coords = list(lat = coords[2], lng = coords[1]),
+    arrival_time_period = "weekday_morning",
+    transportation = list(type = method)
+  )
+}
+
+glimpse(venues_iso)
+```
+
+
+
+```{r}
+
+departure_search <-
+  make_search(id = "departure search example",
+              departure_location_id = "London center",
+              arrival_location_ids = list("Hyde Park", "ZSL London Zoo"),
+              departure_time = strftime(as.POSIXlt(Sys.time(), "UTC"), "%Y-%m-%dT%H:%M:%SZ"),
+              properties = list("travel_time", "distance", "route"),
+              transportation = list(type = "driving"))
+```
+
+
+
 
