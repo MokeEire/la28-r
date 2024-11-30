@@ -4,7 +4,6 @@ library(here)
 library(tidyverse)
 library(sf)
 library(tidytransit)
-library(geojsonio)
 
 # Load Data ---------------------------------------------------------------
 
@@ -129,9 +128,8 @@ venues_metro = venues_sf |>
 
 venues_complete = venues_split |> 
   # map(\(venue) as_tibble(add_nearby_stops(venue, rail_stops_only))) |> 
-  
   # map(\(venue) as_tibble(add_routes(venue, metro_gtfs))) |> 
-  list_rbind() |> 
+  # list_rbind() |> 
   mutate(metro_routes = map(stops_within_1km, \(stops) add_routes(stops, metro_gtfs)))
 
 
@@ -139,7 +137,7 @@ venues_complete = venues_split |>
 # Write -----------------------------------------------------------
 
 # To RDS
-write_rds(venues_complete, here("data", "venues_complete.rds"))
+write_rds(venues_metro, here("data", "venues_complete.rds"))
 
 # To JSON
 jsonlite::toJSON(venues_complete) |> 
