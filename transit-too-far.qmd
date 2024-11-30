@@ -119,7 +119,7 @@ metro_rail_stops_buffer = metro_rail_stops |>
 
 ggplot()+
   geom_sf(data = metro_rail_stops, aes(geometry = geometry))+
-  geom_sf(data = metro_rail_stops_buffer, aes(geometry = geometry), fill = "blue", alpha = 0.5)+
+  geom_sf(data = metro_rail_stops_buffer, aes(geometry = geometry), fill = "blue", alpha = 0.25)+
   theme_void()
 ```
 
