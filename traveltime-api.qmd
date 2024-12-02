@@ -480,6 +480,11 @@ glimpse(venues_isochrones_df)
 ```
 
 ```{r}
+venues_isochrones_df = readRDS(here("data", "venues_isochrones.rds"))
+```
+
+
+```{r}
 list_rbind(venues_isochrones_full)
 
 venues_isochrones_df |> 
@@ -543,7 +548,118 @@ Similar to the Isochrone API request, I need to use the `make_search()` function
 - transportation type
 - a list of properties to return (`travel_time`, `distance`, `route`, `fares`)
 
+Here is the example [from the GitHub repo](https://github.com/traveltime-dev/traveltime-sdk-r?tab=readme-ov-file#routes)
 
+```{r}
+locations <- c(
+  make_location(
+    id = 'London center',
+    coords = list(lat = 51.508930, lng = -0.131387)),
+  make_location(
+    id = 'Hyde Park',
+    coords = list(lat = 51.508824, lng = -0.167093)),
+  make_location(
+    id = 'ZSL London Zoo',
+    coords = list(lat = 51.536067, lng = -0.153596))
+)
+
+departure_search <-
+  make_search(id = "departure search example",
+              departure_location_id = "London center",
+              arrival_location_ids = list("Hyde Park", "ZSL London Zoo"),
+              departure_time = strftime(as.POSIXlt(Sys.time(), "UTC"), "%Y-%m-%dT%H:%M:%SZ"),
+              properties = list("travel_time", "distance", "route"),
+              transportation = list(type = "driving"))
+
+arrival_search <-
+  make_search(id = "arrival  search example",
+              arrival_location_id = "London center",
+              departure_location_ids = list("Hyde Park", "ZSL London Zoo"),
+              arrival_time = strftime(as.POSIXlt(Sys.time(), "UTC"), "%Y-%m-%dT%H:%M:%SZ"),
+              properties = list('travel_time', "distance", "route", "fares"),
+              transportation = list(type = "public_transport"),
+              range = list(enabled = TRUE, width = 1800, max_results = 1))
+
+result <-
+  routes(
+    departure_searches = departure_search,
+    arrival_searches = arrival_search,
+    locations = locations
+  )
+
+print(result)
+```
+
+Convert venue locations into a list format with:
+
+- venue name as `id`, and
+- coordinates as a list with names `lat` and `lng`
+
+```{r}
+venues_locations = venues |> 
+  # Only keep one venue per address
+  distinct(address, .keep_all = T) |> 
+  mutate(lat = st_coordinates(venue_geometry)[,2], 
+         lng = st_coordinates(venue_geometry)[,1],
+         coords = map2(lat, lng, \(lat, lng) list(lat = lat, lng = lng))) |>
+  select(id = venue, coords)
+
+
+venues_locations_list = list(
+  venues_locations$id, 
+  venues_locations$coords
+  ) |> 
+    pmap(\(venue, coords) make_location(id = venue, 
+                                      coords = coords))
+glimpse(venues_locations_list)
+```
+
+Do the same for Census tracts
+
+```{r}
+tract_locations = lapop2020_shp_subset |> 
+  group_by(TRACTA) |> 
+  summarise(center = st_centroid(geometry), .groups = "drop") |> 
+  mutate(lat = st_coordinates(center)[,2], 
+         lng = st_coordinates(center)[,1],
+         coords = map2(lat, lng, \(lat, lng) list(lat = lat, lng = lng))) |>
+  select(id = TRACTA, coords)
+  
+glimpse(tract_locations)
+```
+
+```{r}
+tract_locations_list = list(
+  id = tract_locations$id,
+  coords = tract_locations$coords
+) |> 
+    pmap(\(id, coords) make_location(id = id, 
+                                      coords = coords))
+
+tract_locations_names = map(tract_locations_list, modify, "id") |> 
+  list_flatten() |> 
+  list_c()
+```
+
+Make an arrival search for a single venue.
+
+```{r}
+arrival_search <-
+  make_search(id = "arrival  search example",
+              arrival_location_id = venues_locations_list[[1]][1, "id"],
+              departure_location_ids = list("Hyde Park", "ZSL London Zoo"),
+              arrival_time = strftime(as.POSIXlt(Sys.time(), "UTC"), "%Y-%m-%dT%H:%M:%SZ"),
+              properties = list('travel_time', "distance", "route", "fares"),
+              transportation = list(type = "public_transport"),
+              range = list(enabled = TRUE, width = 1800, max_results = 1))
+
+result <-
+  routes(
+    departure_searches = departure_search,
+    arrival_searches = arrival_search,
+    locations = locations
+  )
+```
 
 
 
