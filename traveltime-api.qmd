@@ -34,6 +34,7 @@ venues = read_rds(here("data", "venues_complete.rds"))
 
 
 ```{r}
+# 2020 population by census tract from: https://www.nhgis.org/
 nhgis_file = here("data", "nhgis", "nhgis0001_ds258_2020_tract.csv")
 
 nhgis = read_csv(nhgis_file)
@@ -42,6 +43,7 @@ lapop2020 = nhgis |>
   filter(STATE == "California", COUNTY == "Los Angeles County") |> 
   select(GISJOIN, YEAR, TRACTA, POPULATION = U7H001)
 
+# Census tract shapefiles
 nhgis_shp_file = here("data", "nhgis", "US_tract_2020.shp")
 
 nhgis_shp = st_read(nhgis_shp_file) |> 
@@ -124,7 +126,7 @@ time_map_fast(
 How to use the result?
 
 ```{r}
-str(result, max.level = 2)
+str(fast_result, max.level = 2)
 ```
 
 
@@ -134,19 +136,19 @@ Based on an old API wrapper package, here's how to convert the response to an SF
 - https://github.com/tlorusso/traveltime
 
 ```{r}
-flat <- c(1:length(fast_result$contentParsed$results[[1]]$shapes)) %>%
+flat <- c(1:length(fast_result$contentParsed$results[[1]]$shapes)) |> 
     purrr::map_dfr(., ~dplyr::bind_rows(fast_result$contentParsed$results[[1]]$shapes[[.x]]$shell),.id="group")
 
 flat_points = sf::st_as_sf(x = flat,
                  coords = c("lng", "lat"),
                  crs = "+proj=longlat +datum=WGS84")
 
-flat_points %>%
-    dplyr::mutate(ID=dplyr::row_number()) %>%
-    dplyr::group_by(group) %>%
-    dplyr::arrange(ID) %>%
-    dplyr::summarize(INT = dplyr::first(ID), do_union = FALSE) %>%
-    sf::st_cast("POLYGON") %>%
+flat_points |> 
+    dplyr::mutate(ID=dplyr::row_number()) |> 
+    dplyr::group_by(group) |> 
+    dplyr::arrange(ID) |> 
+    dplyr::summarize(INT = dplyr::first(ID), do_union = FALSE) |> 
+    sf::st_cast("POLYGON") |> 
     dplyr::select(-INT)
 ```
 
