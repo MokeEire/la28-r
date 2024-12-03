@@ -30,6 +30,24 @@ library(jsonlite)
 venues = read_rds(here("data", "venues_complete.rds"))
 ```
 
+```{r}
+venues |> 
+  ggplot(aes(geometry = venue_geometry)) +
+  geom_sf()+
+  geom_sf_text(aes(label = venue), size = 2)+
+  theme_void()
+```
+```{r}
+venues_distinct_addresses = distinct(venues, address, .keep_all = T)
+
+venues_distinct_addresses |> 
+  ggplot(aes(geometry = venue_geometry)) +
+  geom_sf()+
+  geom_sf_text(aes(label = venue), size = 2)+
+  theme_void()
+```
+
+
 ## Census Tracts
 
 
@@ -39,9 +57,12 @@ nhgis_file = here("data", "nhgis", "nhgis0001_ds258_2020_tract.csv")
 
 nhgis = read_csv(nhgis_file)
 
-lapop2020 = nhgis |> 
+nhgis_la = nhgis |> 
   filter(STATE == "California", COUNTY == "Los Angeles County") |> 
-  select(GISJOIN, YEAR, TRACTA, POPULATION = U7H001)
+  mutate(AREALAND_SQKM = AREALAND/1e6,
+         AREALAND_SQMI = AREALAND_SQKM/2.59,
+         .after = "AREALAND") |> 
+  select(GISJOIN, YEAR, TRACTA, POPULATION = U7H001, AREALAND_SQKM, AREALAND_SQMI)
 
 # Census tract shapefiles
 nhgis_shp_file = here("data", "nhgis", "US_tract_2020.shp")
@@ -58,7 +79,7 @@ Exclude Catalina Island (tract 5991) and the area north of the San Gabriel Mount
 Also exclude tracts that are north of the 34.35 latitude: functionally Santa Clarita and above.
 
 ```{r}
-lapop2020_shp = inner_join(lapop2020, nhgis_shp, by = "GISJOIN")
+nhgis_la_shp = inner_join(nhgis_la, nhgis_shp, by = "GISJOIN")
 
 exclude_tracts = tribble(
   ~TRACTCE,
@@ -67,11 +88,20 @@ exclude_tracts = tribble(
   "930400"
 )
 
-lapop2020_shp_subset = lapop2020_shp |> 
+nhgis_la_shp_subset = nhgis_la_shp |> 
   anti_join(exclude_tracts, by = "TRACTCE") |> 
   filter(st_coordinates(st_centroid(geometry))[,2] < 34.35) |> 
   st_as_sf()
 ```
+
+Join census tract information to the venues
+
+```{r}
+venues_tracts = st_join(venues, nhgis_la_shp_subset, join = st_within)
+
+distinct(venues_tracts, TRACTA, .keep_all = T)
+```
+
 
 # Isochrones
 
@@ -135,7 +165,7 @@ Based on an old API wrapper package, here's how to convert the response to an SF
 - https://tlorusso.github.io/traveltime/vignette.html#taking-a-glimpse-at-the-isochrones-mapview
 - https://github.com/tlorusso/traveltime
 
-```{r}
+```{r, eval=F}
 flat <- c(1:length(fast_result$contentParsed$results[[1]]$shapes)) |> 
     purrr::map_dfr(., ~dplyr::bind_rows(fast_result$contentParsed$results[[1]]$shapes[[.x]]$shell),.id="group")
 
@@ -299,10 +329,10 @@ sample_venue = venues_iso_list[[1]]
 sample_isochrone = time_map_fast_sf(sample_venue)
 
 sample_isochrone |> 
-  inner_join(venues, by = "venue") |> 
+  inner_join(as_tibble(venues), by = "venue") |> 
     ggplot()+
   # Map of LA tracts
-    geom_sf(data = lapop2020_shp_subset, aes(geometry = geometry, fill = POPULATION), colour = NA)+
+    geom_sf(data = nhgis_la_shp_subset, aes(geometry = geometry, fill = POPULATION), colour = NA)+
   # Public transport Isochrone
     geom_sf(aes(geometry = geometry), fill = "red", alpha = 0.5)+
   # Venue point
@@ -411,7 +441,7 @@ sample_venue_full |>
   inner_join(venues, by = "venue") |> 
     ggplot()+
   # Map of LA tracts
-    geom_sf(data = lapop2020_shp_subset, aes(geometry = geometry, fill = POPULATION), colour = NA)+
+    geom_sf(data = nhgis_la_shp_subset, aes(geometry = geometry, fill = POPULATION), colour = NA)+
   # Public transport Isochrone
     geom_sf(aes(geometry = geometry), fill = "red", alpha = 0.5)+
   # Venue point
@@ -434,16 +464,15 @@ times_of_day = str_c("2024-12-03T", c("08", "11", "14", "17", "20"), ":00:00-08:
 
 modes = c("public_transport", "driving")
 
-variations = list(
-  modes,
-  times_of_day
-)
+```
 
+```{r}
 variations = expand_grid(venue = venues_iso$id, times_of_day, modes) |> 
   left_join(venues_iso, by = c("venue" = "id"))
 
 variations
 ```
+
 
 Use these variations to create the arrival searches
 
@@ -485,13 +514,11 @@ venues_isochrones_df = readRDS(here("data", "venues_isochrones.rds"))
 
 
 ```{r}
-list_rbind(venues_isochrones_full)
-
 venues_isochrones_df |> 
   filter(venue == "Stadium Carson") |> 
     ggplot()+
   # Map of LA tracts
-    geom_sf(data = lapop2020_shp_subset, aes(geometry = geometry, fill = POPULATION), colour = NA)+
+    geom_sf(data = nhgis_la_shp_subset, aes(geometry = geometry, fill = POPULATION), colour = NA)+
   # Public transport Isochrone
     geom_sf(aes(geometry = geometry), fill = "red", alpha = 0.5)+
   # Venue point
@@ -507,7 +534,7 @@ show_time_of_day = function(date) stamp("8am on Tuesday", orders = "%I%p %A")(da
 map_isochrones = function(data){
   ggplot(data)+
   # Map of LA tracts
-    geom_sf(data = lapop2020_shp_subset, aes(geometry = geometry, fill = POPULATION), colour = NA)+
+    geom_sf(data = nhgis_la_shp_subset, aes(geometry = geometry, fill = POPULATION), colour = NA)+
   # Public transport Isochrone
     geom_sf(aes(geometry = geometry), fill = "red", alpha = 0.5)+
     geom_sf(aes(geometry = venue_geometry), colour = "black", size = 1.5)+
