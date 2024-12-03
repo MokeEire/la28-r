@@ -575,6 +575,13 @@ Similar to the Isochrone API request, I need to use the `make_search()` function
 - transportation type
 - a list of properties to return (`travel_time`, `distance`, `route`, `fares`)
 
+This means we need the following combinations:
+
+- Census tracts (departure locations) : 2,338
+- Venues (arrival locations) : 14
+- Departure times: 3 (morning, afternoon, evening) or 6 (weekday, weekend)
+- Transportation types: 2 (public transport, driving)
+
 Here is the example [from the GitHub repo](https://github.com/traveltime-dev/traveltime-sdk-r?tab=readme-ov-file#routes)
 
 ```{r}
@@ -614,8 +621,34 @@ result <-
     locations = locations
   )
 
-print(result)
+# print(result)
 ```
+
+So I need an arrival search which looks like this:
+
+```{r}
+# Can define a max of 10 searches
+arrival_search_public_transport <-
+  make_search(id = "arrival  search example",
+              arrival_location_id = "Venue #1",
+              departure_location_ids = list("List of Census tracts"),
+              arrival_time = strftime(as.POSIXlt(Sys.time(), "UTC"), "%Y-%m-%dT%H:%M:%SZ"),
+              properties = list('travel_time', "distance", "route", "fares"),
+              transportation = list(type = "public_transport"),
+              # Can only use range for public transport
+              range = list(enabled = TRUE, width = 600, max_results = 1))
+
+arrival_search_driving <-
+  make_search(id = "arrival  search example",
+              arrival_location_id = "Venue #1",
+              departure_location_ids = list("List of Census tracts"),
+              arrival_time = strftime(as.POSIXlt(Sys.time(), "UTC"), "%Y-%m-%dT%H:%M:%SZ"),
+              properties = list('travel_time', "distance", "route"),
+              transportation = list(type = "driving"))
+```
+
+## Locations
+
 
 Convert venue locations into a list format with:
 
@@ -637,14 +670,17 @@ venues_locations_list = list(
   venues_locations$coords
   ) |> 
     pmap(\(venue, coords) make_location(id = venue, 
-                                      coords = coords))
+                                      coords = coords))# |> 
+  # set_names(venues_locations$id)
 glimpse(venues_locations_list)
+
+
 ```
 
 Do the same for Census tracts
 
 ```{r}
-tract_locations = lapop2020_shp_subset |> 
+tract_locations = nhgis_la_shp_subset |> 
   group_by(TRACTA) |> 
   summarise(center = st_centroid(geometry), .groups = "drop") |> 
   mutate(lat = st_coordinates(center)[,2], 
@@ -661,34 +697,312 @@ tract_locations_list = list(
   coords = tract_locations$coords
 ) |> 
     pmap(\(id, coords) make_location(id = id, 
-                                      coords = coords))
+                                      coords = coords)) |> 
+  list_flatten()# |> 
+  # set_names(tract_locations$id)
+
+glimpse(tract_locations_list[1:10])
 
 tract_locations_names = map(tract_locations_list, modify, "id") |> 
   list_flatten() |> 
   list_c()
 ```
 
+```{r}
+supported_tract_locations = supported_locations(tract_locations_list)
+
+# supported_tract_locations$contentParsed |> str(max.level=2)
+# 
+# supported_tract_locations$contentParsed$locations |> 
+#   map(as_tibble) |> list_rbind()
+
+supported_tract_locations$contentParsed |> 
+  map_depth(2, as_tibble) |> 
+  map(list_rbind)
+```
+
+
+## API Call
+
+To maximize the searches per request I could:
+
+For each venue:
+
+- Specify 10 tracts
+
+```{r}
+
+sample_venue_location = make_location(id = venues_locations$id[[1]], 
+                                      coords = venues_locations$coords[[1]])
+
+sample_tract_location = make_location(id = tract_locations$id[[1]], 
+                                      coords = tract_locations$coords[[1]])
+
+arrival_search_public_transport <-
+  make_search(id = "arrival  search example",
+              arrival_location_id = sample_venue_location[[1]][1,1],
+              departure_location_ids = modify(sample_tract_location, "id"),
+              arrival_time = times_of_day[1],
+              properties = list('travel_time', "distance", "route", "fares"),
+              transportation = list(type = "public_transport", pt_change_delay = 90),
+              # Can only use range for public transport
+              range = list(enabled = TRUE, width = 600, max_results = 1))
+
+arrival_search_public_transport
+```
+
+```{r}
+map(arrival_search_public_transport, keep_at, c("arrival_location_id", "arrival_time", "transportation")) |> 
+  list_rbind() |> 
+  hoist(transportation, "type", "pt_change_delay")
+```
+
+
 Make an arrival search for a single venue.
 
 ```{r}
-arrival_search <-
-  make_search(id = "arrival  search example",
-              arrival_location_id = venues_locations_list[[1]][1, "id"],
-              departure_location_ids = list("Hyde Park", "ZSL London Zoo"),
-              arrival_time = strftime(as.POSIXlt(Sys.time(), "UTC"), "%Y-%m-%dT%H:%M:%SZ"),
-              properties = list('travel_time', "distance", "route", "fares"),
-              transportation = list(type = "public_transport"),
-              range = list(enabled = TRUE, width = 1800, max_results = 1))
+locations = list_flatten(list(venues_locations_list, tract_locations_list[1:10]))
+
+sample_locations = c(sample_venue_location, sample_tract_location)
 
 result <-
   routes(
-    departure_searches = departure_search,
-    arrival_searches = arrival_search,
-    locations = locations
+    # departure_searches = departure_search,
+    arrival_searches = arrival_search_public_transport,
+    locations = sample_locations
+  )
+
+str(result, max.level = 3)
+```
+The parsed results return a list of searches. 
+Each search has a list of locations, each with a list of properties.
+
+```{r}
+parsed_result = result$contentParsed$results
+
+parsed_result |> str(max.level=4)
+```
+
+For each location, we want to extract the travel time, distance, route, and fares.
+
+```{r}
+parsed_result_locations = parsed_result |> list_flatten() |> pluck("locations")
+
+parsed_result_locations |> str(max.level = 4)
+```
+
+```{r}
+# For each location, pluck properties
+parsed_result_location_properties = modify(parsed_result_locations, "properties") |> list_flatten()
+
+parsed_result_location_properties |> str(max.level = 3)
+
+```
+
+```{r}
+# Flatten properties
+modify_in(parsed_result_locations, list(1, "properties"), \(props) list_flatten(props)) |> 
+  # Keep only travel time and distance
+  modify_in(list(1, "properties"), \(props) keep_at(props, c("travel_time", "distance"))) |> 
+  map(list_flatten, name_spec = "{inner}") |> 
+  map(as_tibble) |> 
+  list_rbind()
+```
+
+
+```{r}
+parsed_result_location_route = modify(parsed_result_location_properties, "route")# |> list_flatten()
+
+parsed_result_location_route |> str(max.level = 3)
+```
+
+```{r}
+parsed_result_location_route_parts = modify(parsed_result_location_route, "parts") |> list_flatten()
+
+parsed_result_location_route_parts |> str(max.level = 2)
+```
+
+```{r}
+part_elements = c("id", "type", "mode", "road", "directions", "distance", "travel_time", "line", "departure_station", "arrival_station")
+
+route_part_df = parsed_result_location_route_parts |> 
+  map(keep_at, part_elements) |> #str(max.level=3)
+  map(as_tibble) |> 
+  list_rbind() |> 
+  mutate(travel_time_mins = travel_time/60, .after = "travel_time")
+
+route_part_df
+```
+
+
+
+```{r}
+route_part_df |> 
+  group_by(mode) |> 
+  summarise(
+    route_parts = n(),
+    total_distance = sum(distance),
+    total_travel_time = sum(travel_time),
+    total_travel_time_mins = sum(travel_time_mins)
   )
 ```
 
 
+```{r}
+parsed_result_location_fares = modify(parsed_result_location_properties, "fares")# |> list_flatten()
+
+parsed_result_location_fares |> str(max.level = 3)
+```
+```{r}
+routes_to_df(
+    # departure_searches = departure_search,
+    route_arrival_search = arrival_search_public_transport,
+    route_locations = sample_locations
+  )
+```
+
+### Difference from Google Maps
+
+I tested the same directions in Google Maps: [Link](https://www.google.com/maps/dir/34.25947,+-118.293/700+Exposition+Park+Dr,+Los+Angeles,+CA+90037/@34.1376791,-118.4211584,11z/data=!3m1!4b1!4m16!4m15!1m3!2m2!1d-118.293!2d34.25947!1m5!1m1!1s0x80c2c8082da49a5d:0x284a0de27bb78037!2m2!1d-118.2850237!2d34.016109!2m3!6e1!7e2!8j1733212800!3e3!5m1!1e2?entry=ttu&g_ep=EgoyMDI0MTEyNC4xIKXMDSoASAFQAw%3D%3D)
+
+Google Maps estimates the travel time around 87 mins compared to TravelTime's 83.
+Interestingly, TravelTime's directions have the route get off the 409 bus 4 stops earlier and get on the Expo line at an earlier station (Grand Ave Arts instead of 7th St/Metro Center).
+This requires a 5 minute walk from 7:20-7:25 to catch a 7:25 train. 
+This might be a little optimistic, so it could be worth adding a 1 minute transfer delay.
+
+The output is:
+
+A list of searches, each with a list of locations, each with a list of properties.
+Within properties, we get the travel time, distance, route, and fares.
+
+### Test Multiple departure locations
+
+```{r}
+sample_tract_location = make_location(id = tract_locations$id[[1]], 
+                                      coords = tract_locations$coords[[1]])
+sample_tract_locations = tract_locations_list[c(1,3)]
+
+multiple_arrival_search_public_transport <-
+  make_search(id = "arrival multiple search example",
+              arrival_location_id = sample_venue_location[[1]][1,1],
+              departure_location_ids = as.list(tract_locations_names[c(1,3)]),
+              arrival_time = times_of_day[1],
+              properties = list('travel_time', "distance", "route", "fares"),
+              transportation = list(type = "public_transport", pt_change_delay = 90),
+              # Can only use range for public transport
+              range = list(enabled = TRUE, width = 600, max_results = 1))
+
+multiple_arrival_search_public_transport
+```
+
+```{r}
+
+multiple_sample_locations = c(sample_venue_location, list_flatten(sample_tract_locations))
+
+multiple_result <-
+  routes(
+    # departure_searches = departure_search,
+    arrival_searches = multiple_arrival_search_public_transport,
+    locations = multiple_sample_locations
+  )
+
+str(multiple_result, max.level = 3)
+```
+
+```{r}
+parsed_multiple_result = multiple_result$contentParsed$results
+
+parsed_multiple_result |> str(max.level=4)
+```
+
+
+```{r}
+routes_to_df(
+    # departure_searches = departure_search,
+    route_arrival_search = multiple_arrival_search_public_transport,
+    route_locations = multiple_sample_locations
+  )
+```
+
+### Test Multiple Searches
+
+If we can run up to 10 search objects in an API call, we can run a search for a venue with two departure locations => 20 results per call.
+
+
+```{r}
+multiple_searches = list_flatten(venues_locations_list)[1:10] |> 
+  map_chr(pluck, "id") |> 
+  map(\(venue) make_search(id = str_c(venue, " - arrival multiple search example"),
+              arrival_location_id = venue,
+              departure_location_ids = modify(sample_tract_locations, pluck, "id"),
+              arrival_time = times_of_day[1],
+              properties = list('travel_time', "distance", "route", "fares"),
+              transportation = list(type = "public_transport", pt_change_delay = 90),
+              # Can only use range for public transport
+              range = list(enabled = TRUE, width = 600, max_results = 1))) |> 
+  list_flatten()
+```
+
+```{r}
+multiple_search_locations = c(list_flatten(venues_locations_list)[1:10], list_flatten(sample_tract_locations))
+
+multiple_searches_result <-
+  routes(
+    # departure_searches = departure_search,
+    arrival_searches = multiple_searches,
+    locations = multiple_search_locations
+  )
+```
+
+
+```{r}
+routes_to_df(
+    # departure_searches = departure_search,
+    route_arrival_search = multiple_searches,
+    route_locations = multiple_search_locations
+  )
+```
+
+I can include up to 10 searches in a single API call, but each search can only have 2 departure locations.
+
+To reduce the API calls, I can create sets of 2 departure locations from all the census tracts
+
+```{r}
+tract_locations_list |> 
+  glimpse()
+
+length(tract_locations_list)/2
+
+imap(tract_locations_list, group = ceiling(seq_along(tract_locations_list)/2))
+```
+
+Or...lazily, I could just run a search for each tract
+
+```{r}
+venue_ids = list_flatten(venues_locations_list)[1:10] |> 
+  map_chr(pluck, "id")
+tract_ids = map_chr(tract_locations_list, pluck, "id")
+
+
+route_searches_1 = expand_grid(venue = venue_ids, tract = tract_ids) |>
+  pmap(\(venue, tract) make_search(id = str_c(tract, " to ", venue),
+              arrival_location_id = venue,
+              departure_location_ids = as.list(tract),
+              arrival_time = times_of_day[1],
+              properties = list('travel_time', "distance", "route", "fares"),
+              transportation = list(type = "public_transport", pt_change_delay = 90),
+              # Can only use range for public transport
+              range = list(enabled = TRUE, width = 600, max_results = 1))) |> 
+  list_flatten()
+```
+
+```{r}
+routes_to_df(
+    # departure_searches = departure_search,
+    route_arrival_search = multiple_searches,
+    route_locations = multiple_search_locations
+  )
+```
 
 
 
