@@ -1,0 +1,164 @@
+---
+title: "Making Isochrones"
+format: html
+---
+
+Documentation:
+
+- [Github](https://github.com/traveltime-dev/traveltime-sdk-r)
+- [Routes](https://playground.traveltime.com/routes)
+- [Isochrones](https://docs.traveltime.com/api/overview/isochrones)
+
+# Plan
+
+Generate map of places in LA you can travel to each venue within different time frames:
+
+- 30 mins, 1hr, and 1.5hrs
+- via car and via public transport
+- at 8am and 11am on a Weekday
+
+```{r setup}
+library(here)
+library(tidyverse)
+library(sf)
+library(traveltimeR)
+library(jsonlite)
+
+# Load custom functions
+source(here("R", "fct-traveltime.R"))
+```
+
+# Data
+
+## Census Tracts
+
+
+```{r}
+# 2020 population by census tract from: https://www.nhgis.org/
+nhgis_file = here("data", "nhgis", "nhgis0001_ds258_2020_tract.csv")
+
+nhgis = read_csv(nhgis_file)
+
+nhgis_la = nhgis |> 
+  filter(STATE == "California", COUNTY == "Los Angeles County") |> 
+  mutate(AREALAND_SQKM = AREALAND/1e6,
+         AREALAND_SQMI = AREALAND_SQKM/2.59,
+         .after = "AREALAND") |> 
+  select(GISJOIN, YEAR, TRACTA, POPULATION = U7H001, AREALAND_SQKM, AREALAND_SQMI)
+
+# Census tract shapefiles
+nhgis_shp_file = here("data", "nhgis", "US_tract_2020.shp")
+
+nhgis_shp = st_read(nhgis_shp_file) |> 
+  # Reproject CRS to WGS84
+  st_transform(crs = "EPSG:4326")
+
+```
+
+Create an opinionated subset of Los Angeles tracts that make up the area of LA where transportation to venues is relevant.
+
+Exclude Catalina Island (tract 5991) and the area north of the San Gabriel Mountains (tract 9304).
+Also exclude tracts that are north of the 34.35 latitude: functionally Santa Clarita and above.
+
+```{r}
+nhgis_la_shp = inner_join(nhgis_la, nhgis_shp, by = "GISJOIN")
+
+exclude_tracts = tribble(
+  ~TRACTCE,
+  "599100",
+  "599000",
+  "930400"
+)
+
+nhgis_la_shp_subset = nhgis_la_shp |> 
+  anti_join(exclude_tracts, by = "TRACTCE") |> 
+  filter(st_coordinates(st_centroid(geometry))[,2] < 34.35) |> 
+  st_as_sf()
+
+glimpse(nhgis_la_shp_subset)
+```
+
+```{r}
+ggplot(nhgis_la_shp_subset)+
+  geom_sf(colour = "#333")+
+  theme_void()
+```
+
+Or census tract by population
+
+```{r}
+ggplot(nhgis_la_shp_subset)+
+  geom_sf(aes(fill = POPULATION), colour = "#333")+
+  scale_fill_continuous(breaks = scales::breaks_pretty(), labels = scales::comma, type = "viridis",
+                        guide = guide_colorbar(nbin=20))+
+  theme_void()
+
+ggplot2::cut_interval(nhgis_la_shp_subset$POPULATION, 100000)
+```
+
+
+## Venues
+
+Venues data I compiled: https://docs.google.com/spreadsheets/d/18_P4igWVdnWZpbXPb7ZHEw6vscrD8gNAeu0BfDXmE4k/edit?usp=sharing
+
+I opted to include those that are on the LA28 website.
+There might be others that have not been confirmed and the plans seemed to have changed since the 2017 Olympics application documents were written. 
+
+
+```{r}
+venues = read_rds(here("data", "venues_complete.rds"))
+```
+
+Some of the venues are at the same address e.g. different stadia in Carson
+
+```{r}
+venues_distinct_addresses = distinct(venues, address, .keep_all = T)
+
+venues_distinct_addresses |> 
+  ggplot(aes(geometry = venue_geometry)) +
+  geom_sf(data = nhgis_la_shp_subset, aes(geometry = geometry), colour = "#333")+
+  geom_sf(colour = "blue")+
+  # geom_sf_text(aes(label = venue), size = 2)+
+  theme_void()
+```
+
+## Combine the two
+
+Join census tract information to the venues
+
+```{r}
+venues_tracts = st_join(venues, nhgis_la_shp_subset, join = st_within)
+
+distinct(venues_tracts, TRACTA, .keep_all = T)
+```
+
+```{r}
+venues_iso = venues |> 
+  # Only keep one venue per address
+  distinct(address, .keep_all = T) |> 
+  mutate(lat = st_coordinates(venue_geometry)[,2], 
+         lng = st_coordinates(venue_geometry)[,1],
+         coords = map2(lat, lng, \(lat, lng) list(lat = lat, lng = lng))) |>
+  select(id = venue, coords)
+
+venues_iso_search = list(
+  venues_iso$id, 
+  venues_iso$coords
+  ) |> 
+    pmap(\(venue, coords) make_search(id = venue, 
+                                      travel_time = 3600, 
+                                      arrival_time = "2024-12-03T09:00:00-08:00", 
+                                      coords = coords, 
+                                      transportation = list(type = "public_transport", 
+                                                            walking_time=20*60, 
+                                                            pt_change_delay = 120),
+                                      level_of_detail = list(scale_type = "simple", level = "medium")))
+```
+
+
+```{r}
+venues_isochrones_sample = map(venues_iso_sample_list, time_map_sf)
+
+list_rbind(venues_isochrones_sample, names_to = "id")
+```
+
