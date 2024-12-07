@@ -89,11 +89,12 @@ Or census tract by population
 ```{r}
 ggplot(nhgis_la_shp_subset)+
   geom_sf(aes(fill = POPULATION), colour = "#333")+
-  scale_fill_continuous(breaks = scales::breaks_pretty(), labels = scales::comma, type = "viridis",
-                        guide = guide_colorbar(nbin=20))+
+  scale_fill_continuous(name = "Population", breaks = scales::breaks_pretty(), labels = scales::comma, type = "viridis",
+                        guide = guide_colorbar(direction = "horizontal", position = "bottom",
+                                               theme = theme(legend.key.width = unit(8, "cm"),
+                                                             legend.key.height = unit(.25, "cm"))))+
   theme_void()
 
-ggplot2::cut_interval(nhgis_la_shp_subset$POPULATION, 100000)
 ```
 
 
@@ -117,7 +118,7 @@ venues_distinct_addresses = distinct(venues, address, .keep_all = T)
 venues_distinct_addresses |> 
   ggplot(aes(geometry = venue_geometry)) +
   geom_sf(data = nhgis_la_shp_subset, aes(geometry = geometry), colour = "#333")+
-  geom_sf(colour = "blue")+
+  geom_sf(colour = "blue", size = 3)+
   # geom_sf_text(aes(label = venue), size = 2)+
   theme_void()
 ```
@@ -127,27 +128,27 @@ venues_distinct_addresses |>
 Join census tract information to the venues
 
 ```{r}
-venues_tracts = st_join(venues, nhgis_la_shp_subset, join = st_within)
+venues_tracts = st_join(venues_distinct_addresses, nhgis_la_shp_subset, join = st_within)
 
 distinct(venues_tracts, TRACTA, .keep_all = T)
 ```
 
 ```{r}
-venues_iso = venues |> 
-  # Only keep one venue per address
-  distinct(address, .keep_all = T) |> 
+venues_iso = venues_distinct_addresses |> 
   mutate(lat = st_coordinates(venue_geometry)[,2], 
          lng = st_coordinates(venue_geometry)[,1],
          coords = map2(lat, lng, \(lat, lng) list(lat = lat, lng = lng))) |>
-  select(id = venue, coords)
+  select(id = venue, coords) |> 
+  st_drop_geometry()
 
-venues_iso_search = list(
-  venues_iso$id, 
-  venues_iso$coords
-  ) |> 
-    pmap(\(venue, coords) make_search(id = venue, 
-                                      travel_time = 3600, 
-                                      arrival_time = "2024-12-03T09:00:00-08:00", 
+# Create a combination of venues and travel times for isochrone requests
+iso_request_df = venues_iso |> 
+  expand_grid(travel_time = 60*c(30, 60, 90))
+
+venues_iso_search = iso_request_df |> 
+    pmap(\(id, coords, travel_time) make_search(id = str_c(id, "_", travel_time), 
+                                      travel_time = travel_time, 
+                                      arrival_time = "2024-12-10T09:00:00-08:00", 
                                       coords = coords, 
                                       transportation = list(type = "public_transport", 
                                                             walking_time=20*60, 
@@ -157,8 +158,10 @@ venues_iso_search = list(
 
 
 ```{r}
-venues_isochrones_sample = map(venues_iso_sample_list, time_map_sf)
+venues_isochrones = map(venues_iso_search, time_map_sf)
 
-list_rbind(venues_isochrones_sample, names_to = "id")
+list_rbind(venues_isochrones, names_to = "id")
 ```
+
+
 
