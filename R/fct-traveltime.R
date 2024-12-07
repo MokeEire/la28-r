@@ -47,6 +47,64 @@ time_map_fast_sf = function(arrival){
 show_time_of_day = function(date) stamp("8am on Tuesday", orders = "%I%p %A")(date)
 
 
+time_map_sf = function(arrival){
+  Sys.sleep(1)
+  arrival_df = list_rbind(arrival) |> 
+    unnest_wider(transportation, names_sep = "_")
+  # Call the API
+  time_map_result = time_map(
+    arrival_searches = arrival,
+    format = "geo+json"
+  )
+  
+  result_shapes = time_map_result$contentParsed$results[[1]]$shapes
+  
+  result_shell = modify(result_shapes, "shell") |> 
+    modify_depth(.depth = 2, as_tibble) |> 
+    map(list_rbind) |> 
+    list_rbind(names_to = "group")
+  
+  result_points = sf::st_as_sf(x = result_shell,
+                               coords = c("lng", "lat"),
+                               crs = "EPSG:4326") #"+proj=longlat +datum=WGS84"
+  
+  result_sum = result_points |> 
+    dplyr::mutate(ID=dplyr::row_number()) |> 
+    dplyr::group_by(group) |> 
+    dplyr::arrange(ID) |> 
+    summarise(
+      INT = dplyr::first(ID),
+      geometry = st_cast(st_combine(geometry), "POLYGON"), 
+      .groups = "drop"
+    ) |> 
+    # dplyr::summarize(INT = dplyr::first(ID), do_union = FALSE) |> 
+    #   sf::st_cast("POLYGON") |> 
+    dplyr::select(-INT)
+  
+  if(arrival_df$transportation_type == "public_transport"){
+    mutate(result_sum,
+           id = arrival_df$id,
+           venue = str_extract(arrival_df$id, ".+(?=_)"),
+           travel_time = arrival_df$travel_time,
+           arrival_time = arrival_df$arrival_time,
+           transportation = arrival_df$transportation_type,
+           walking_time = arrival_df$transportation_walking_time,
+           pt_change_delay = arrival_df$transportation_pt_change_delay,
+           .before = "group")
+  } else {
+    mutate(result_sum,
+           id = arrival_df$id,
+           venue = str_extract(arrival_df$id, ".+(?=_)"),
+           travel_time = arrival_df$travel_time,
+           arrival_time = arrival_df$arrival_time,
+           transportation = arrival_df$transportation_type,
+           walking_time = NA_real_,
+           pt_change_delay = NA_real_,
+           .before = "group")
+  }
+  
+}
+
 # map isochrones function
 map_isochrones = function(data){
   ggplot(data)+
