@@ -143,7 +143,7 @@ venues_iso = venues_distinct_addresses |>
 
 # Create a combination of venues and travel times for isochrone requests
 iso_request_df = venues_iso |> 
-  expand_grid(travel_time = 60*c(30, 60, 90))
+  expand_grid(travel_time = 60*c(30, 60, 90, 120, 150))
 
 venues_iso_search = iso_request_df |> 
     pmap(\(id, coords, travel_time) make_search(id = str_c(id, "_", travel_time), 
