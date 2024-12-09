@@ -160,8 +160,43 @@ venues_iso_search = iso_request_df |>
 ```{r}
 venues_isochrones = map(venues_iso_search, time_map_sf)
 
-list_rbind(venues_isochrones, names_to = "id")
+venues_isochrones_df = list_rbind(venues_isochrones, names_to = "id")
 ```
+
+```{r}
+glimpse(venues_isochrones_df)
+```
+
+
+```{r}
+isochrone_df = venues_isochrones_df |> 
+  # filter(venue == sample(venue, 1)) |> 
+  inner_join(venues, by = "venue") |> 
+  mutate(travel_time_mins = factor(travel_time/60))|> 
+  arrange(desc(travel_time))
+
+isochrone_df |> 
+  split(isochrone_df$venue) |> 
+  map(\(df){
+    # Single venue, 3-tier isochrone
+  ggplot(df)+
+  geom_sf(data = nhgis_la_shp_subset, aes(geometry=geometry), alpha = .9)+
+  geom_sf(aes(geometry= geometry, fill = travel_time_mins), alpha = .8)+
+  geom_sf(aes(geometry = venue_geometry), alpha = .5, size = 1)+
+  # scale_fill_fermenter(breaks = c(29.999, 59.999, 89.999), labels = ~round(.x, 0), type = "div", palette = 8)+
+  # scale_fill_steps2(breaks = c(30, 60, 90), n.breaks = 3, nice.breaks = F)+
+  scale_fill_brewer(name = "Mins", type = "div", palette = 8, direction = -1,
+                        guide = guide_legend(direction = "horizontal", position = "bottom",
+                                               theme = theme(legend.key.width = unit(.75, "cm"), legend.text.position = "bottom",
+                                                             legend.key.height = unit(.5, "cm"), legend.title.position = "right")))+
+  labs(title = "How long does it take to get to ________ using public transit?",
+       subtitle = unique(df$venue),
+       caption = "Allows for 20 mins walking to/between transit stops\n\nSource: Traveltime API")+
+  theme_void()
+  })
+  
+```
+
 
 
 
