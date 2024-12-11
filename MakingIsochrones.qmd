@@ -76,6 +76,8 @@ nhgis_la_shp_subset = nhgis_la_shp |>
   st_as_sf()
 
 glimpse(nhgis_la_shp_subset)
+
+st_write(nhgis_la_shp_subset, here("data", "nhgis_la_subset.geojson.json"), driver = "GeoJSON")
 ```
 
 ```{r}
@@ -95,6 +97,22 @@ ggplot(nhgis_la_shp_subset)+
                                                              legend.key.height = unit(.25, "cm"))))+
   theme_void()
 
+```
+What are the top 10 most populous tracts?
+
+```{r}
+nhgis_la_shp_subset |> 
+  arrange(desc(POPULATION)) |> 
+  head(10)
+
+nhgis_top_pop = nhgis_la_shp_subset |> 
+  slice_max(order_by = POPULATION, n = 20)
+
+nhgis_top_pop |> 
+  ggplot()+
+  geom_sf(data = nhgis_la_shp_subset, aes(geometry = geometry), fill = "grey")+
+  geom_sf(aes(geometry = geometry), fill = "red")+
+  theme_void()
 ```
 
 
