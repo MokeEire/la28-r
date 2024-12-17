@@ -98,12 +98,12 @@ ggplot(nhgis_la_shp_subset)+
   theme_void()
 
 ```
-What are the top 10 most populous tracts?
+What are the top 20 most populous tracts?
 
 ```{r}
 nhgis_la_shp_subset |> 
   arrange(desc(POPULATION)) |> 
-  head(10)
+  head(20)
 
 nhgis_top_pop = nhgis_la_shp_subset |> 
   slice_max(order_by = POPULATION, n = 20)
@@ -113,6 +113,20 @@ nhgis_top_pop |>
   geom_sf(data = nhgis_la_shp_subset, aes(geometry = geometry), fill = "grey")+
   geom_sf(aes(geometry = geometry), fill = "red")+
   theme_void()
+```
+
+Create an outline shape
+
+```{r}
+nhgis_la_shp_outline = nhgis_la_shp_subset |> 
+  st_union()
+
+nhgis_la_shp_outline |> 
+  ggplot()+
+  geom_sf(aes(geometry=geometry))+
+  theme_void()
+
+# st_write(nhgis_la_shp_outline, here("data", "nhgis_la_outline.geojson.json"), driver = "GeoJSON")
 ```
 
 
@@ -131,6 +145,7 @@ venues = read_rds(here("data", "venues_complete.rds"))
 Some of the venues are at the same address e.g. different stadia in Carson
 
 ```{r}
+# Distinct addresses for venues
 venues_distinct_addresses = distinct(venues, address, .keep_all = T)
 
 venues_distinct_addresses |> 
