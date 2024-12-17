@@ -80,11 +80,11 @@ time_map_sf = function(arrival){
     # dplyr::summarize(INT = dplyr::first(ID), do_union = FALSE) |> 
     #   sf::st_cast("POLYGON") |> 
     dplyr::select(-INT)
-  
+
   if(arrival_df$transportation_type == "public_transport"){
     mutate(result_sum,
            id = arrival_df$id,
-           venue = str_extract(arrival_df$id, ".+(?=_)"),
+           venue = str_extract(arrival_df$id, "([^_])+(?=_)"),
            travel_time = arrival_df$travel_time,
            arrival_time = arrival_df$arrival_time,
            transportation = arrival_df$transportation_type,
@@ -94,7 +94,7 @@ time_map_sf = function(arrival){
   } else {
     mutate(result_sum,
            id = arrival_df$id,
-           venue = str_extract(arrival_df$id, ".+(?=_)"),
+           venue = str_extract(arrival_df$id, "([^_])+(?=_)"),
            travel_time = arrival_df$travel_time,
            arrival_time = arrival_df$arrival_time,
            transportation = arrival_df$transportation_type,
