@@ -77,7 +77,7 @@ nhgis_la_shp_subset = nhgis_la_shp |>
 
 glimpse(nhgis_la_shp_subset)
 
-st_write(nhgis_la_shp_subset, here("data", "nhgis_la_subset.geojson.json"), driver = "GeoJSON")
+# st_write(nhgis_la_shp_subset, here("data", "nhgis_la_subset.geojson.json"), driver = "GeoJSON")
 ```
 
 ```{r}
