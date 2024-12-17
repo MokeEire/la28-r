@@ -300,10 +300,39 @@ isochrone_plots = st_as_sf(isochrones_transit_venues) |>
        subtitle = unique(df$venue),
        caption = "Allows for 20 mins walking to/between transit stops\n\nSource: Traveltime API")+
   theme_void()
-  }) |> set_names(unique(isochrone_df$venue))
+  }) |> set_names(unique(isochrones_transit_venues$venue))
   
 isochrone_plots
 ```
+
+### Driving
+
+```{r}
+
+isochrone_plots_drive = st_as_sf(isochrones_drive_venues) |> 
+  split(isochrones_drive_venues$venue) |> 
+  map(\(df){
+    # Single venue, 3-tier isochrone
+  ggplot(df)+
+  geom_sf(aes(geometry= geometry, fill = travel_time_mins), alpha = .8)+
+  geom_sf(aes(geometry = venue_geometry), alpha = .5, size = 1)+
+  geom_sf(data = nhgis_top_pop, aes(geometry = geometry), colour = "blue", fill = NA)+
+  geom_sf(data = nhgis_la_shp_subset, aes(geometry=geometry), alpha = .7)+
+  # scale_fill_fermenter(breaks = c(29.999, 59.999, 89.999), labels = ~round(.x, 0), type = "div", palette = 8)+
+  # scale_fill_steps2(breaks = c(30, 60, 90), n.breaks = 3, nice.breaks = F)+
+  scale_fill_brewer(name = "Mins", type = "div", palette = 8, direction = -1, 
+                        guide = guide_legend(direction = "horizontal", position = "bottom",
+                                               theme = theme(legend.key.width = unit(.75, "cm"), legend.text.position = "bottom",
+                                                             legend.key.height = unit(.5, "cm"), legend.title.position = "right")))+
+  labs(title = "How long does it take to get to ________ using public transit?",
+       subtitle = unique(df$venue),
+       caption = "Allows for 20 mins walking to/between transit stops\n\nSource: Traveltime API")+
+  theme_void()
+  }) |> set_names(unique(isochrones_drive_venues$venue))
+  
+isochrone_plots_drive
+```
+
 
 ```{r}
 isochrone_plots[[10]] |> 
@@ -311,12 +340,160 @@ isochrone_plots[[10]] |>
 ```
 
 
-To make this data accessible in Svelte, I need to convert it to GeoJSON
+
+
+# Analyze Population in Range
+
+One way to analyze the accessibility of the venues with isochrones is to measure what proportion of the LA population lives within a certain range.
+To do this, I need to pick a particular Isochrone and use a spatial join on census tracts for tracts which intersect. 
+
+## Try Spatial Join on one Isochrone
+
+Pick a particular isocrhone
 
 ```{r}
-sf::st_as_sf(venues_isochrones_df) |> 
-  sf::st_write(here("data", "isochrones.geojson"))
+isochrone_ex = isochrones_transit_df |> 
+  filter(venue == "Arena Downtown", id == 6) |> 
+  mutate(travel_time_mins = travel_time/60, .after = "travel_time") |> 
+  group_by(id, venue, travel_time, travel_time_mins, arrival_time, transportation, walking_time, pt_change_delay) |>
+  summarise(geometry = st_union(geometry), .groups = "drop") |>
+  st_as_sf()
+
+isochrone_ex
+```
+
+```{r}
+ggplot(isochrone_ex)+
+  geom_sf(data = nhgis_la_shp_subset, aes(geometry=geometry), alpha = .9)+
+  geom_sf(data = isochrone_ex, aes(geometry = geometry), colour = "black", fill = "white")+
+  labs(subtitle = unique(isochrone_ex$venue))+
+  theme_void()
 ```
 
 
+Join to census tracts
+
+```{r}
+isochrone_ex_joined = st_join(y=isochrone_ex, x=nhgis_la_shp_subset, join = st_intersects) |> #glimpse()
+  mutate(in_iso = !is.na(travel_time),
+         iso_pop = if_else(in_iso, POPULATION, 0),
+         pop_pct = sum(iso_pop, na.rm=T)/sum(POPULATION, na.rm=T))
+  
+isochrone_ex_joined|> 
+  ggplot()+
+  geom_sf(aes(geometry=geometry, fill = in_iso), alpha = .9)+
+  # geom_sf(data = isochrone_ex, aes(geometry = geometry), colour = "black", fill = "black")+
+  labs(subtitle = str_c("Travel to ", unique(isochrone_ex$venue), " within ", unique(isochrone_ex$travel_time_mins), " mins: ", scales::percent(unique(isochrone_ex_joined$pop_pct))))+
+  theme_void()
+  
+```
+
+```{r}
+st_join(x=isochrone_ex, y=nhgis_la_shp_subset, join = st_intersects) |> 
+  group_by(venue, travel_time, travel_time_mins, arrival_time, transportation, walking_time, pt_change_delay) |> 
+  summarise(pop = sum(POPULATION),
+            pop_pct = pop/sum(nhgis_la_shp_subset$POPULATION), .groups = "drop")
+```
+
+## Join Population to Isochrones
+
+Now try to do the same for all the isochrones
+
+```{r}
+isochrones_union = isochrones_transit_df |> 
+  mutate(travel_time_mins = travel_time/60, .after = "travel_time") |> 
+  # Convert multiple individual polygons to single multipolygon
+  group_by(id, venue, travel_time, travel_time_mins, arrival_time, transportation, walking_time, pt_change_delay) |>
+  summarise(geometry = st_union(geometry), .groups = "drop") |>
+  st_as_sf()
+```
+
+```{r}
+isochrones_pop_joined = isochrones_union |> 
+  st_join(y=nhgis_la_shp_subset, join = st_intersects)
+
+isochrones_pop_pct = isochrones_pop_joined |> 
+  st_drop_geometry() |> 
+  group_by(venue, travel_time, travel_time_mins, arrival_time, transportation, walking_time, pt_change_delay) |>
+  summarise(pop = sum(POPULATION),
+            pop_pct = pop/sum(nhgis_la_shp_subset$POPULATION), .groups = "drop")
+```
+
+
+
+```{r}
+isochrones_pop_pct |> 
+  group_by(travel_time_mins) |> 
+  summarise(
+    min = min(pop_pct),
+    mean = mean(pop_pct),
+    median = median(pop_pct),
+    max = max(pop_pct)
+  )
+```
+
+```{r}
+isochrones_pop_pct |> 
+  mutate(travel_time_fct = factor(travel_time_mins)) |> 
+  ggplot(aes(x = travel_time_fct))+
+  geom_boxplot(aes(y = pop_pct))+
+  geom_point(aes(y = pop_pct))+
+  scale_y_continuous(labels = scales::percent)+
+  theme_minimal()
+```
+
+On average, 75% of the population can reach the Olympic venues within 2 hours.
+
+```{r}
+isochrones_pop_pct |> 
+  filter(venue == "Sepulveda Basin Recreation Area")
+```
+
+Create a stacked bar chart that displays the proportion of the population that can access the venue at each time interval
+
+```{r}
+travel_time_stacked = isochrones_pop_pct |> 
+  filter(travel_time_mins <= 120) |> 
+  group_by(venue) |> 
+  mutate(max_pct = max(pop_pct)) |> 
+  ungroup() |> 
+  arrange(desc(max_pct), venue, desc(travel_time_mins)) |> 
+  mutate(travel_time_fct = factor(travel_time_mins, 
+                                  levels = c(30, 60, 90, 120, 150), 
+                                  labels = c("< 30", "30–60", "60–90", "90–120", "120–150")),
+         venue_fct = fct_inorder(factor(venue))) |> 
+  ggplot(aes(x = pop_pct))+
+  geom_col(aes(y = venue_fct, fill = travel_time_fct), colour = "white", position = position_identity())+
+  geom_text(aes(x = max_pct, y = venue_fct, label = scales::percent(max_pct, accuracy = 1)),
+            hjust = 0, vjust = .7, alpha = .9, size = 3.25, colour = "darkgrey", nudge_x = .01)+
+  scale_x_continuous(name = NULL, labels = scales::percent, expand = expansion(add = .1))+
+  scale_fill_brewer(name = "Mins", type = "div", palette = 8, direction = -1, 
+                        guide = guide_legend(direction = "horizontal", position = "bottom",
+                                               theme = theme(legend.key.width = unit(1.5, "cm"), legend.text.position = "bottom",
+                                                             legend.key.height = unit(.5, "cm"), 
+                                                             legend.title.position = "right")))+
+  labs(y = NULL, title = "How much of LA can access the venues by public transit?", subtitle = "In journeys less than 2 hours")+
+  theme_minimal()+
+  theme(panel.grid.major.y = element_blank())
+
+travel_time_stacked
+
+travel_time_stacked |> 
+  ggsave(filename = here("output", "travel_time_stacked.png"), width = 900, height = 600, units = "px", scale = 2.5)
+```
+
+# Analyze 
+
+
+# Output
+
+Write the isochrone data to GeoJSON
+
+```{r}
+isochrones_pop_pct |> 
+  select(venue, travel_time, arrival_time, pop, pop_pct) |> 
+  right_join(isochrones_union, by = c("venue", "travel_time", "arrival_time")) |> 
+  st_write(here("data", "isochronesPop.geojson.json"), driver = "GeoJSON", append = F)
+
+```
 
