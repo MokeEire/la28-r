@@ -170,6 +170,9 @@ distinct(venues_tracts, TRACTA, .keep_all = T)
 
 ## Create API Requests
 
+First, need to calculate the latitude and longitude of the venue addresses.
+Next, put them into a list column which works with the `make_search()` function.
+
 ```{r}
 venues_iso = venues_distinct_addresses |> 
   mutate(lat = st_coordinates(venue_geometry)[,2], 
@@ -177,15 +180,22 @@ venues_iso = venues_distinct_addresses |>
          coords = map2(lat, lng, \(lat, lng) list(lat = lat, lng = lng))) |>
   select(id = venue, coords) |> 
   st_drop_geometry()
+```
 
-# Create a combination of venues and travel times for isochrone requests
+Create a combination of venues and travel times for isochrone requests
+
+```{r}
 iso_request_df = venues_iso |> 
-  expand_grid(travel_time = 60*c(30, 60, 90, 120, 150))
+  expand_grid(travel_time = 60*c(30, 60, 90, 120))
+```
 
+Create a search object for each venue: public transport
+
+```{r}
 venues_iso_search = iso_request_df |> 
     pmap(\(id, coords, travel_time) make_search(id = str_c(id, "_", travel_time), 
                                       travel_time = travel_time, 
-                                      arrival_time = "2024-12-10T09:00:00-08:00", 
+                                      arrival_time = "2024-12-18T09:00:00-08:00", 
                                       coords = coords, 
                                       transportation = list(type = "public_transport", 
                                                             walking_time=20*60, 
@@ -193,27 +203,86 @@ venues_iso_search = iso_request_df |>
                                       level_of_detail = list(scale_type = "simple", level = "medium")))
 ```
 
+Create a search object for each venue: driving
 
 ```{r}
-venues_isochrones = map(venues_iso_search, time_map_sf)
+venues_iso_search_drive = iso_request_df |> 
+    pmap(\(id, coords, travel_time) make_search(id = str_c(id, "_", travel_time), 
+                                      travel_time = travel_time, 
+                                      arrival_time = "2024-12-18T09:00:00-08:00", 
+                                      coords = coords, 
+                                      transportation = list(type = "driving"),
+                                      level_of_detail = list(scale_type = "simple", level = "medium")))
 
-venues_isochrones_df = list_rbind(venues_isochrones, names_to = "id")
 ```
 
-```{r}
-glimpse(venues_isochrones_df)
-```
-## Plot the Isochrones
+## Make API Requests
+
+Or load the data
 
 ```{r}
-isochrone_df = venues_isochrones_df |> 
+isochrones_transit_df = readRDS(here("data", str_c("isochrones_transit", today(), ".Rds")))
+isochrones_drive_df = readRDS(here("data", str_c("isochrones_drive", today(), ".Rds")))
+```
+
+
+### Public Transport
+
+```{r}
+isochrones_transit_results = map(venues_iso_search, time_map_sf)
+
+isochrones_transit_df = list_rbind(isochrones_transit_results, names_to = "id")
+
+isochrones_transit_venues = isochrones_transit_df |> 
   # filter(venue == sample(venue, 1)) |> 
   inner_join(venues, by = "venue") |> 
   mutate(travel_time_mins = factor(travel_time/60))|> 
   arrange(desc(travel_time))
 
-isochrone_plots = isochrone_df |> 
-  split(isochrone_df$venue) |> 
+glimpse(isochrones_transit_df)
+```
+### Driving
+
+```{r}
+isochrones_drive_results = map(venues_iso_search_drive, time_map_sf)
+
+isochrones_drive_df = list_rbind(isochrones_drive_results, names_to = "id")
+isochrones_drive_venues = isochrones_drive_df |> 
+  # filter(venue == sample(venue, 1)) |> 
+  inner_join(venues, by = "venue") |> 
+  mutate(travel_time_mins = factor(travel_time/60))|> 
+  arrange(desc(travel_time))
+```
+
+
+## Save Isochrone Data
+
+First, save as RDS files to load easily into R
+
+```{r}
+# Write Isochrones data
+saveRDS(isochrones_transit_df, here("data", str_c("isochrones_transit", today(), ".Rds")))
+saveRDS(isochrones_drive_df, here("data", str_c("isochrones_drive", today(), ".Rds")))
+
+```
+
+To make this data accessible in Svelte, I need to convert it to GeoJSON
+
+```{r}
+sf::st_as_sf(isochrones_transit_df) |> 
+  sf::st_write(here("data", "isochronesTransit.geojson"))
+
+sf::st_as_sf(isochrones_drive_df) |> 
+  sf::st_write(here("data", "isochronesDrive.geojson"))
+```
+
+## Plot the Isochrones
+
+### Public Transport
+
+```{r}
+isochrone_plots = st_as_sf(isochrones_transit_venues) |> 
+  split(isochrones_transit_venues$venue) |> 
   map(\(df){
     # Single venue, 3-tier isochrone
   ggplot(df)+
