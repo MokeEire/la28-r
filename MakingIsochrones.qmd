@@ -289,7 +289,7 @@ isochrone_plots = st_as_sf(isochrones_transit_venues) |>
   geom_sf(data = nhgis_la_shp_subset, aes(geometry=geometry), alpha = .9)+
   geom_sf(aes(geometry= geometry, fill = travel_time_mins), alpha = .8)+
   geom_sf(aes(geometry = venue_geometry), alpha = .5, size = 1)+
-  geom_sf(data = nhgis_top_pop, aes(geometry = geometry), colour = "blue", fill = NA)+
+  # geom_sf(data = nhgis_top_pop, aes(geometry = geometry), colour = "blue", fill = NA)+
   # scale_fill_fermenter(breaks = c(29.999, 59.999, 89.999), labels = ~round(.x, 0), type = "div", palette = 8)+
   # scale_fill_steps2(breaks = c(30, 60, 90), n.breaks = 3, nice.breaks = F)+
   scale_fill_brewer(name = "Mins", type = "div", palette = 8, direction = -1, 
@@ -316,7 +316,7 @@ isochrone_plots_drive = st_as_sf(isochrones_drive_venues) |>
   ggplot(df)+
   geom_sf(aes(geometry= geometry, fill = travel_time_mins), alpha = .8)+
   geom_sf(aes(geometry = venue_geometry), alpha = .5, size = 1)+
-  geom_sf(data = nhgis_top_pop, aes(geometry = geometry), colour = "blue", fill = NA)+
+  # geom_sf(data = nhgis_top_pop, aes(geometry = geometry), colour = "blue", fill = NA)+
   geom_sf(data = nhgis_la_shp_subset, aes(geometry=geometry), alpha = .7)+
   # scale_fill_fermenter(breaks = c(29.999, 59.999, 89.999), labels = ~round(.x, 0), type = "div", palette = 8)+
   # scale_fill_steps2(breaks = c(30, 60, 90), n.breaks = 3, nice.breaks = F)+
