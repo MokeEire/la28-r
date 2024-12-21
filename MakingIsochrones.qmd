@@ -39,6 +39,7 @@ nhgis_file = here("data", "nhgis", "nhgis0001_ds258_2020_tract.csv")
 
 nhgis = read_csv(nhgis_file)
 
+# Filter for LA County
 nhgis_la = nhgis |> 
   filter(STATE == "California", COUNTY == "Los Angeles County") |> 
   mutate(AREALAND_SQKM = AREALAND/1e6,
@@ -49,11 +50,18 @@ nhgis_la = nhgis |>
 # Census tract shapefiles
 nhgis_shp_file = here("data", "nhgis", "US_tract_2020.shp")
 
+# Reproject CRS to WGS84
 nhgis_shp = st_read(nhgis_shp_file) |> 
-  # Reproject CRS to WGS84
   st_transform(crs = "EPSG:4326")
 
 ```
+What's the total population and area of LA County?
+
+```{r}
+nhgis_la |> 
+  summarise(across(c(POPULATION, AREALAND_SQKM, AREALAND_SQMI), sum))
+```
+
 
 Create an opinionated subset of Los Angeles tracts that make up the area of LA where transportation to venues is relevant.
 
@@ -61,8 +69,10 @@ Exclude Catalina Island (tract 5991) and the area north of the San Gabriel Mount
 Also exclude tracts that are north of the 34.35 latitude: functionally Santa Clarita and above.
 
 ```{r}
+# Join tract population and GIS data
 nhgis_la_shp = inner_join(nhgis_la, nhgis_shp, by = "GISJOIN")
 
+# Create list of tracts to exclude
 exclude_tracts = tribble(
   ~TRACTCE,
   "599100",
@@ -70,8 +80,10 @@ exclude_tracts = tribble(
   "930400"
 )
 
+# Create an opinionated subset of LA tracts
 nhgis_la_shp_subset = nhgis_la_shp |> 
   anti_join(exclude_tracts, by = "TRACTCE") |> 
+  # Remove tracts where the centroid is north of 34.35
   filter(st_coordinates(st_centroid(geometry))[,2] < 34.35) |> 
   st_as_sf()
 
@@ -80,13 +92,15 @@ glimpse(nhgis_la_shp_subset)
 # st_write(nhgis_la_shp_subset, here("data", "nhgis_la_subset.geojson.json"), driver = "GeoJSON")
 ```
 
+Show what this opinionated LA subset looks like
+
 ```{r}
 ggplot(nhgis_la_shp_subset)+
   geom_sf(colour = "#333")+
   theme_void()
 ```
 
-Or census tract by population
+Let's look at LA's population by census tract
 
 ```{r}
 ggplot(nhgis_la_shp_subset)+
@@ -98,6 +112,16 @@ ggplot(nhgis_la_shp_subset)+
   theme_void()
 
 ```
+
+What is the total population for this subset?
+
+```{r}
+nhgis_la_shp_subset |> 
+  st_drop_geometry() |> 
+  summarise(total_pop = sum(POPULATION))
+```
+
+
 What are the top 20 most populous tracts?
 
 ```{r}
@@ -142,12 +166,14 @@ There might be others that have not been confirmed and the plans seemed to have 
 venues = read_rds(here("data", "venues_complete.rds"))
 ```
 
-Some of the venues are at the same address e.g. different stadia in Carson
+Some of the venues are at the same address e.g. different stadia in Carson.
+I can reduce the API calls I need to make by only using the distinct addresses.
 
 ```{r}
 # Distinct addresses for venues
 venues_distinct_addresses = distinct(venues, address, .keep_all = T)
 
+# Plot the venues over the LA map
 venues_distinct_addresses |> 
   ggplot(aes(geometry = venue_geometry)) +
   geom_sf(data = nhgis_la_shp_subset, aes(geometry = geometry), colour = "#333")+
@@ -174,6 +200,7 @@ First, need to calculate the latitude and longitude of the venue addresses.
 Next, put them into a list column which works with the `make_search()` function.
 
 ```{r}
+# Calculate lat/lon and put them in a list column
 venues_iso = venues_distinct_addresses |> 
   mutate(lat = st_coordinates(venue_geometry)[,2], 
          lng = st_coordinates(venue_geometry)[,1],
@@ -187,6 +214,8 @@ Create a combination of venues and travel times for isochrone requests
 ```{r}
 iso_request_df = venues_iso |> 
   expand_grid(travel_time = 60*c(30, 60, 90, 120))
+
+glimpse(iso_request_df)
 ```
 
 Create a search object for each venue: public transport
@@ -218,11 +247,11 @@ venues_iso_search_drive = iso_request_df |>
 
 ## Make API Requests
 
-Or load the data
+Or load the data if it already exists
 
 ```{r}
-isochrones_transit_df = readRDS(here("data", str_c("isochrones_transit", today(), ".Rds")))
-isochrones_drive_df = readRDS(here("data", str_c("isochrones_drive", today(), ".Rds")))
+isochrones_transit_df = readRDS(here("data", str_c("isochrones_transit", "2024-12-16", ".Rds")))
+isochrones_drive_df = readRDS(here("data", str_c("isochrones_drive", "2024-12-16", ".Rds")))
 ```
 
 
@@ -233,27 +262,42 @@ isochrones_transit_results = map(venues_iso_search, time_map_sf)
 
 isochrones_transit_df = list_rbind(isochrones_transit_results, names_to = "id")
 
+glimpse(isochrones_transit_df)
+```
+
+Join the isochrone data to the venues
+
+```{r}
 isochrones_transit_venues = isochrones_transit_df |> 
   # filter(venue == sample(venue, 1)) |> 
   inner_join(venues, by = "venue") |> 
   mutate(travel_time_mins = factor(travel_time/60))|> 
   arrange(desc(travel_time))
 
-glimpse(isochrones_transit_df)
+glimpse(isochrones_transit_venues)
 ```
+
+
 ### Driving
 
 ```{r}
 isochrones_drive_results = map(venues_iso_search_drive, time_map_sf)
 
 isochrones_drive_df = list_rbind(isochrones_drive_results, names_to = "id")
+
+```
+
+Join the isochrone data to the venues
+
+```{r}
 isochrones_drive_venues = isochrones_drive_df |> 
   # filter(venue == sample(venue, 1)) |> 
   inner_join(venues, by = "venue") |> 
   mutate(travel_time_mins = factor(travel_time/60))|> 
   arrange(desc(travel_time))
-```
 
+glimpse(isochrones_drive_venues)
+```
 
 ## Save Isochrone Data
 
@@ -334,14 +378,6 @@ isochrone_plots_drive
 ```
 
 
-```{r}
-isochrone_plots[[10]] |> 
-  ggsave(filename = here("output", "isochrone_sbra.png"), width = 900, height = 600, units = "px", scale = 2.5)
-```
-
-
-
-
 # Analyze Population in Range
 
 One way to analyze the accessibility of the venues with isochrones is to measure what proportion of the LA population lives within a certain range.
@@ -389,7 +425,9 @@ isochrone_ex_joined|>
 ```
 
 ```{r}
+# Note: This won't run without dropping the geometry
 st_join(x=isochrone_ex, y=nhgis_la_shp_subset, join = st_intersects) |> 
+  st_drop_geometry() |> 
   group_by(venue, travel_time, travel_time_mins, arrival_time, transportation, walking_time, pt_change_delay) |> 
   summarise(pop = sum(POPULATION),
             pop_pct = pop/sum(nhgis_la_shp_subset$POPULATION), .groups = "drop")
@@ -400,6 +438,7 @@ st_join(x=isochrone_ex, y=nhgis_la_shp_subset, join = st_intersects) |>
 Now try to do the same for all the isochrones
 
 ```{r}
+# Combine multiple polygons per Venue/Time into one MultiPolygon
 isochrones_union = isochrones_transit_df |> 
   mutate(travel_time_mins = travel_time/60, .after = "travel_time") |> 
   # Convert multiple individual polygons to single multipolygon
@@ -409,9 +448,11 @@ isochrones_union = isochrones_transit_df |>
 ```
 
 ```{r}
+# Join isochrones to census tracts where they intersect
 isochrones_pop_joined = isochrones_union |> 
   st_join(y=nhgis_la_shp_subset, join = st_intersects)
 
+# Calculate the population within each isochrone
 isochrones_pop_pct = isochrones_pop_joined |> 
   st_drop_geometry() |> 
   group_by(venue, travel_time, travel_time_mins, arrival_time, transportation, walking_time, pt_change_delay) |>
@@ -419,7 +460,7 @@ isochrones_pop_pct = isochrones_pop_joined |>
             pop_pct = pop/sum(nhgis_la_shp_subset$POPULATION), .groups = "drop")
 ```
 
-
+Check some summary stats of population within range for each travel time
 
 ```{r}
 isochrones_pop_pct |> 
@@ -435,19 +476,14 @@ isochrones_pop_pct |>
 ```{r}
 isochrones_pop_pct |> 
   mutate(travel_time_fct = factor(travel_time_mins)) |> 
-  ggplot(aes(x = travel_time_fct))+
-  geom_boxplot(aes(y = pop_pct))+
-  geom_point(aes(y = pop_pct))+
-  scale_y_continuous(labels = scales::percent)+
+  ggplot(aes(y = travel_time_fct))+
+  geom_boxplot(aes(x = pop_pct))+
+  geom_point(aes(x = pop_pct))+
+  scale_x_continuous(labels = scales::percent)+
   theme_minimal()
 ```
 
-On average, 75% of the population can reach the Olympic venues within 2 hours.
-
-```{r}
-isochrones_pop_pct |> 
-  filter(venue == "Sepulveda Basin Recreation Area")
-```
+On average, the Olympic venues are accessible to ~75% of the population within 2 hours, but <20% within 1 hour.
 
 Create a stacked bar chart that displays the proportion of the population that can access the venue at each time interval
 
@@ -468,8 +504,8 @@ travel_time_stacked = isochrones_pop_pct |>
             hjust = 0, vjust = .7, alpha = .9, size = 3.25, colour = "darkgrey", nudge_x = .01)+
   scale_x_continuous(name = NULL, labels = scales::percent, expand = expansion(add = .1))+
   scale_fill_brewer(name = "Mins", type = "div", palette = 8, direction = -1, 
-                        guide = guide_legend(direction = "horizontal", position = "bottom",
-                                               theme = theme(legend.key.width = unit(1.5, "cm"), legend.text.position = "bottom",
+                        guide = guide_legend(direction = "horizontal", position = "top",
+                                               theme = theme(legend.key.width = unit(.75, "cm"), legend.text.position = "bottom",
                                                              legend.key.height = unit(.5, "cm"), 
                                                              legend.title.position = "right")))+
   labs(y = NULL, title = "How much of LA can access the venues by public transit?", subtitle = "In journeys less than 2 hours")+
