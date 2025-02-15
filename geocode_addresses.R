@@ -9,7 +9,7 @@ library(googlesheets4)
 # Load Data ---------------------------------------------------------------
 
 venues_drive_link = "https://docs.google.com/spreadsheets/d/18_P4igWVdnWZpbXPb7ZHEw6vscrD8gNAeu0BfDXmE4k/edit?gid=0#gid=0"
-venues = read_sheet(venues_drive_link) |> 
+venues = read_sheet(venues_drive_link, sheet = "Venues") |> 
   clean_names() |> 
   # Separate sources into list column
   mutate(sources = str_split(source_s, ";\\\n"))
