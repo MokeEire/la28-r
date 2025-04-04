@@ -39,6 +39,7 @@ nhgis = read_csv(nhgis_file)
 # Filter for LA County
 nhgis_la = nhgis |> 
   filter(STATE == "California", COUNTY == "Los Angeles County") |> 
+  # Scale land area from square meters to square kilometers and square miles
   mutate(AREALAND_SQKM = AREALAND/1e6,
          AREALAND_SQMI = AREALAND_SQKM/2.59,
          .after = "AREALAND") |> 
@@ -62,7 +63,7 @@ exclude_tracts = tribble(
   "930400"
 )
 
-# Create an opinionated subset of LA tracts
+# Create an opinionated subset of LA tracts: Basically south of the Angeles forest
 nhgis_la_shp_subset = nhgis_la_shp |> 
   anti_join(exclude_tracts, by = "TRACTCE") |> 
   # Remove tracts where the centroid is north of 34.35
@@ -84,8 +85,10 @@ venues_iso = venues_distinct_addresses |>
   st_drop_geometry()
 
 # Create a combination of venues and travel times for isochrone requests
+travel_times = 60*c(30, 60, 90, 120)
+
 iso_request_df = venues_iso |> 
-  expand_grid(travel_time = 60*c(30, 60, 90, 120))
+  expand_grid(travel_time = travel_times)
 
 glimpse(iso_request_df)
 
@@ -105,60 +108,50 @@ isochrones_transit_results = map(venues_iso_search, time_map_sf)
 
 isochrones_transit_df = list_rbind(isochrones_transit_results, names_to = "id")
 
-venue_addresses = venues_distinct_addresses |> 
-  st_drop_geometry() |> 
-  select(venue, venue_simplified, address)
+## Alternatively: Load isochrone from files -------------------------------
+isochrones_transit_df = readRDS(here("data", str_c("isochrones_transit", "2024-12-16", ".Rds")))
+isochrones_drive_df = readRDS(here("data", str_c("isochrones_drive", "2024-12-16", ".Rds")))
 
 
 # Combine Isochrones + Venues ---------------------------------------------
 
-# ISSUE: Initially isochrones were created for each venue, but I realized 
-# multiple venues shared almost identical locations e.g. Carson venues
-# The first join adds the simplified venue  name
-# The second join brings in other venue info
-venue_addresses = venues_distinct_addresses |> 
-  st_drop_geometry() |> 
-  select(venue, venue_simplified, address)
-
-# 1. Join on venues
 isochrones_transit_venues = isochrones_transit_df |> 
-  # filter(venue == sample(venue, 1)) |> 
-  inner_join(venue_addresses, by = "venue") |> 
-  distinct(id, venue_simplified, travel_time, arrival_time, transportation, walking_time, pt_change_delay, group, geometry) |> 
-  inner_join(venues_distinct_addresses, by = "venue_simplified") |> 
-  # select(-venue.x) |> 
-  # rename(venue = venue.y) |> 
+  # Join with venues to get the venue data
+  inner_join(venues_distinct_addresses, by = "venue") |> 
+  # Create travel time factor var
   mutate(travel_time_mins = factor(travel_time/60))|> 
   arrange(desc(travel_time))
 
 
 # Join Population Data ----------------------------------------------------
 
-
 # Combine multiple polygons per Venue/Time into one MultiPolygon
 isochrones_union = isochrones_transit_venues |> 
-  mutate(travel_time_mins = travel_time/60, .after = "travel_time") |> 
   # Convert multiple individual polygons to single multipolygon
   group_by(id, venue_simplified, venues, travel_time, travel_time_mins, 
            arrival_time, transportation, walking_time, pt_change_delay) |>
   summarise(geometry = st_union(geometry), .groups = "drop") |>
   st_as_sf()
 
+
 # Spatial join isochrones to census tracts where they intersect
-isochrones_pop_joined = isochrones_union |> 
+isochrones_pop = isochrones_union |> 
   st_join(y=nhgis_la_shp_subset, join = st_intersects)
 
-# Calculate the population within each isochrone
-isochrones_pop_pct = isochrones_pop_joined |> 
+# Calculate the % of total population within each isochrone
+total_population = sum(nhgis_la_shp_subset$POPULATION)
+
+isochrones_pop_pct = isochrones_pop |> 
   st_drop_geometry() |> 
   group_by(venue_simplified, travel_time, travel_time_mins, arrival_time, transportation, walking_time, pt_change_delay) |>
   summarise(pop = sum(POPULATION),
-            pop_pct = pop/sum(nhgis_la_shp_subset$POPULATION), .groups = "drop")
+            pop_pct = pop/total_population, .groups = "drop")
 
+# Join pop % data with isochrones
+isochrones_output_df = left_join(isochrones_union,
+                                 isochrones_pop_pct,
+                                 by = c("venue_simplified", "travel_time", "travel_time_mins", "transportation", "walking_time", "pt_change_delay", "arrival_time"))
 
 # Write Data --------------------------------------------------------------
 
-isochrones_pop_pct |> 
-  select(venue_simplified, travel_time, arrival_time, pop, pop_pct) |> 
-  right_join(isochrones_union, by = c("venue_simplified", "travel_time", "arrival_time")) |> 
-  st_write(here("data", "isochronesTransit.geojson.json"), driver = "GeoJSON", append = F)
+st_write(isochrones_output_df, here("output", "isochronesTransit2025.geojson.json"), driver = "GeoJSON", append = F)
