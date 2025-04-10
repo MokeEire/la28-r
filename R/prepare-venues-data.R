@@ -23,8 +23,6 @@ venues_geo = venues |>
 la_venues_geo = venues_geo |> 
   filter(in_los_angeles)
 
-
-
 venues_sf = st_as_sf(la_venues_geo, coords = c("longitude", "latitude"), crs="EPSG:4326", sf_column_name = "venue_geometry") |> 
   # combine events for the venue
   group_by(venue_simplified) |> 

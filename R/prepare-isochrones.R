@@ -5,7 +5,7 @@ library(tidyverse)
 library(sf)
 library(traveltimeR)
 library(jsonlite)
-
+source(here("R", "fct-traveltime.R"))
 
 # Read in data ------------------------------------------------------------
 
@@ -32,6 +32,7 @@ glimpse(venues_distinct_addresses)
 ## Population data (NHGIS) -----------------------------------------------
 
 # 2020 population by census tract from: https://www.nhgis.org/
+# Thought I should try this instead: https://tech.popdata.org/ipumsr/index.html
 nhgis_file = here("data", "nhgis", "nhgis0001_ds258_2020_tract.csv")
 
 nhgis = read_csv(nhgis_file)
@@ -76,7 +77,7 @@ glimpse(nhgis_la_shp_subset)
 
 # Create API Requests -----------------------------------------------------
 
-# Calculate lat/lon and put them in a list column
+# Calculate lat/lon and put them in a list column to match format for API calls
 venues_iso = venues_distinct_addresses |> 
   mutate(lat = st_coordinates(venue_geometry)[,2], 
          lng = st_coordinates(venue_geometry)[,1],
