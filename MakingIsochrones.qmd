@@ -75,16 +75,16 @@ nhgis_la_shp = inner_join(nhgis_la, nhgis_shp, by = "GISJOIN")
 # Create list of tracts to exclude
 exclude_tracts = tribble(
   ~TRACTCE,
-  "599100",
-  "599000",
-  "930400"
+  "599100", # Catalina Island
+  "599000", # Catalina Island
+  "930400" # Angeles Forest
 )
 
 # Create an opinionated subset of LA tracts
 nhgis_la_shp_subset = nhgis_la_shp |> 
-  anti_join(exclude_tracts, by = "TRACTCE") |> 
+  anti_join(exclude_tracts, by = "TRACTCE") |>
   # Remove tracts where the centroid is north of 34.35
-  filter(st_coordinates(st_centroid(geometry))[,2] < 34.35) |> 
+  filter(st_coordinates(st_centroid(geometry))[,2] < 34.35) |>
   st_as_sf()
 
 glimpse(nhgis_la_shp_subset)
