@@ -9,9 +9,6 @@ library(tictoc)
 source(here("R", "fct-traveltime.R"))
 
 # Read in data ------------------------------------------------------------
-tic("Prepare Venues Data")
-source(here("R", "prepare-venues-data.R"))
-toc()
 
 ## Venues -----------------------------------------------------------------
 
