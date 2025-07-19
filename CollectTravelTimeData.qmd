@@ -1,0 +1,418 @@
+---
+title: "Collecting Tract-level Travel Time Data"
+author: "Mark Barrett"
+format: html
+---
+
+Documentation:
+
+- [Github](https://github.com/traveltime-dev/traveltime-sdk-r)
+- [Routes](https://playground.traveltime.com/routes)
+
+# Plan
+
+Analyze the differences in travel time to Los Angeles 2028 Olympic venues between driving and transit.
+Collect tract-level travel time data to each venue using both transit and driving modes.
+To do this, I will find the centroid of each tract in the Los Angeles area and then use the TravelTime API to collect travel time data to each venue.
+
+- 30 mins, 1hr, and 1.5hrs
+- via car and via public transport
+- at 8am and 11am on a Weekday
+
+```{r setup}
+library(here)
+library(tidyverse)
+library(sf)
+library(traveltimeR)
+library(jsonlite)
+
+# Load custom functions
+source(here("R", "fct-traveltime.R"))
+```
+
+# Data
+
+## Census Tracts
+
+Downloaded from nhgis.com
+
+```{r}
+# Census tract shapefiles
+nhgis_shp_file = here("data", "nhgis", "US_tract_2020.shp")
+
+# Create list of tracts to exclude
+exclude_tracts = tribble(
+  ~TRACTCE, ~include,
+  "599100", F, # Catalina Island
+  "599000", F, # Catalina Island
+  "930400", F,  # Angeles Forest
+)
+
+# Load the shapefile
+nhgis_shp = read_sf(nhgis_shp_file) |> 
+  # Filter to Los Angeles, CA
+  filter(STATEFP == "06", COUNTYFP == "037") |>
+  # Reproject CRS to WGS84
+  st_transform(crs = "EPSG:4326") |> 
+  # Create an opinionated subset of LA tracts
+  # anti_join(exclude_tracts, by = "TRACTCE") |>
+  # Remove tracts where the centroid is north of 34.35
+  # filter(st_coordinates(st_centroid(geometry))[,2] < 34.35) |>
+  select(GISJOIN, TRACTCE, GEOID, NAME, NAMELSAD, geometry) |> 
+  left_join(exclude_tracts, by = "TRACTCE") |> 
+  mutate(include = case_when(!is.na(include) ~ include,
+                             st_coordinates(st_centroid(geometry))[,2] > 34.35 ~ F,
+                             .default = T))
+
+glimpse(nhgis_shp)
+
+```
+
+Check how this looks on a map
+
+```{r}
+ggplot(nhgis_shp) +
+  geom_sf(aes(fill = include), colour=NA) +
+  coord_sf() +
+  labs(title = "Census Tracts in Los Angeles County",
+       subtitle = "Filtered to exclude Catalina Island, Angeles Forest, and Antelope Valley")+
+  theme_void()
+```
+Remove these tracts
+
+```{r}
+nhgis_la = nhgis_shp |> 
+  filter(include) |> 
+  select(-include)
+```
+
+
+# Find centroids of census tracts
+
+```{r}
+nhgis_centroids = nhgis_la |> 
+  # Find centroids of each tract
+  mutate(centroid = st_centroid(geometry))
+
+ggplot(nhgis_centroids) +
+  geom_sf(aes(geometry = geometry), fill = NA) +
+  geom_sf(aes(geometry = centroid), colour = "red")+
+  coord_sf() +
+  labs(title = "Census Tracts centroids")+
+  theme_void()
+```
+
+Okay so there are all our centroids, how many do we have in total?
+
+```{r}
+nrow(nhgis_centroids)
+```
+
+
+Next, let's pull in the venues data
+
+## Venues
+
+```{r}
+venues = read_rds(here("data", "venues_complete.rds"))
+
+glimpse(venues)
+```
+
+# Collect travel time data
+
+The goal is to collect travel time data between each venue and each census tract centroid.
+How many requests will this be?
+
+```{r}
+nrow(nhgis_centroids) * nrow(venues)
+```
+To do this, we'll be using the Travel [Time Matrix API](https://docs.traveltime.com/api/start/travel-time-distance-matrix) from TravelTime.
+According to the documentation, a *request* is made up of up to 10 *searches*.
+Each search is either a one-to-many or many-to-one calculation which can include up to 100,000 locations.
+So theoretically we could collect all the data we need with a total of 4 requests: 
+2 requests of 10 searches (1 search per venue) for each mode of transport, where each search calculates the travel time between a venue and all the tracts.
+
+
+# Create API Requests
+
+Here is the example of the Time Matrix API request from [TravelTime's documentation](https://docs.traveltime.com/api/reference/distance-matrix):
+
+```{r}
+venues |> 
+  mutate(lat = st_coordinates(venue_geometry)[,2], 
+         lng = st_coordinates(venue_geometry)[,1]) |> 
+  st_drop_geometry() |>
+  select(id = venue_location, lat, lng) |> 
+  pmap(\(id, lat, lng) make_location(id = id, coords = list(lat = as.numeric(lat), lng = as.numeric(lng)))) |> 
+  glimpse()
+```
+
+
+```{r}
+locationsDF <- data.frame(
+  id = c('London center', 'Hyde Park', 'ZSL London Zoo'),
+  lat = c(51.508930, 51.508824, 51.536067),
+  lng = c(-0.131387, -0.167093, -0.153596)
+)
+locations <- apply(locationsDF, 1, function(x)
+  make_location(id = x['id'], coords = list(lat = as.numeric(x["lat"]),
+                                            lng = as.numeric(x["lng"]))))
+locations <- unlist(locations, recursive = FALSE)
+
+departure_search <-
+  make_search(id = "departure search example",
+              departure_location_id = "London center",
+              arrival_location_ids = list("Hyde Park", "ZSL London Zoo"),
+              departure_time = strftime(as.POSIXlt(Sys.time(), "UTC"), "%Y-%m-%dT%H:%M:%SZ"),
+              travel_time = 1800,
+              properties = list('travel_time'),
+              transportation = list(type = "bus"),
+              range = list(enabled = TRUE, width = 600, max_results = 3))
+
+arrival_search <-
+  make_search(id = "arrival search example",
+              arrival_location_id = "London center",
+              departure_location_ids = list("Hyde Park", "ZSL London Zoo"),
+              arrival_time = strftime(as.POSIXlt(Sys.time(), "UTC"), "%Y-%m-%dT%H:%M:%SZ"),
+              travel_time = 1800,
+              properties = list('travel_time', "distance", "distance_breakdown", "fares"),
+              transportation = list(type = "public_transport"),
+              range = list(enabled = TRUE, width = 600, max_results = 3))
+
+result <-
+  time_filter(
+    departure_searches = departure_search,
+    arrival_searches = arrival_search,
+    locations = locations
+  )
+
+# print(result)
+
+```
+
+So this gives us a good template of how to create the API requests, but the output isn't the best so I'll make a function similar to that for the isochrones to format the output into a dataframe.
+
+But first, let's organize the searches.
+To start, the locations are a dataframe with the id, latitude, and longitude of each location, which they map to the function `make_location()` and then unlist to create a list of 1-row dataframes.
+
+## Locations
+
+```{r}
+glimpse(locations)
+```
+
+We can do the same with the venues and census tracts
+
+```{r}
+# Calculate lat/lon and put them in a list column to match format for API calls
+venue_locations_old = venues |>
+  mutate(lat = st_coordinates(venue_geometry)[,2],
+         lng = st_coordinates(venue_geometry)[,1]) |>
+  st_drop_geometry() |>
+  select(id = venue_location, lat, lng)
+
+venue_locations_old_list <- apply(venue_locations_old, 1, function(x)
+  make_location(id = x['id'], coords = list(lat = as.numeric(x["lat"]),
+                                            lng = as.numeric(x["lng"])))) |> 
+  unlist(recursive=F)
+locations <- unlist(locations, recursive = FALSE)
+
+venue_locations = venues |> 
+  mutate(lat = st_coordinates(venue_geometry)[,2], 
+         lng = st_coordinates(venue_geometry)[,1],
+         coords = map2(lat, lng, \(lat, lng) list(lat = lat, lng = lng))) |>
+  select(id = venue_location, coords) |> 
+  st_drop_geometry()
+
+glimpse(venue_locations)
+```
+
+```{r}
+tract_locations = nhgis_centroids |> 
+  mutate(lat = st_coordinates(centroid)[,2], 
+         lng = st_coordinates(centroid)[,1]) |> 
+  st_drop_geometry() |>
+  select(id = TRACTCE, lat, lng) |> 
+  pmap(\(id, lat, lng) make_location(id = id, coords = list(lat = as.numeric(lat), lng = as.numeric(lng))))
+
+tract_locations_old = nhgis_centroids |>
+  mutate(lat = st_coordinates(centroid)[,2],
+         lng = st_coordinates(centroid)[,1]) |>
+  st_drop_geometry() |>
+  select(id = TRACTCE, lat, lng)
+
+tract_locations_old_list <- apply(tract_locations_old, 1, function(x)
+  make_location(id = x['id'], coords = list(lat = as.numeric(x["lat"]),
+                                            lng = as.numeric(x["lng"])))) |> 
+  unlist(recursive=F)
+
+glimpse(tract_locations)
+```
+
+We can then combine the two dataframes and use `group_split()` to turn them into a list of dataframes, which we pass into the `make_location()` function.
+
+```{r}
+locations_list = list_flatten(list(venue_locations, tract_locations))
+locations_list_old = list_flatten(list(venue_locations_old_list, tract_locations_old_list))
+
+glimpse(locations_list)
+```
+
+
+Then to make the departure searches, we need to create a search 
+
+```{r}
+glimpse(departure_search)
+```
+
+```{r}
+tract_ids = map_depth(tract_locations, 2, "id") |> 
+  list_simplify()
+venue_ids = map_depth(venue_locations, 2, "id") |> 
+  list_simplify()
+
+departure_search_test = make_search(id = "departure search test",
+                                    departure_location_id = tract_ids,
+                                    arrival_location_ids = venue_ids[[1]],
+                                    departure_time = next_weekday(),
+                                    travel_time = 60*60*3, # 3 hrs
+                                    properties = list('travel_time', 'distance'),
+                                    transportation = list(type = "driving"))
+
+arrival_search_test <-
+  make_search(id = "arrival search test",
+              arrival_location_id = venue_ids[[1]],
+              departure_location_ids = tract_ids[[1]],
+              arrival_time = next_weekday(),
+              travel_time = 60*60*3,
+              properties = list('travel_time', "distance"),
+              transportation = list(type = "driving"))
+
+iso_request_df = venues_iso |> 
+  expand_grid(travel_time = 60*c(30, 60, 90, 120),
+              time_of_day = c(9, 11, 13))
+
+time_requests = venue_locations |> sample_n(1) |> 
+  expand_grid(tract = map_chr(tract_ids, pluck)) |> 
+  # select(id) |> 
+  pmap(\(id, coords, tract) make_search(id = id, 
+                                                           travel_time = 60*60*3, 
+                                 arrival_location_id = id,
+                                 coords = coords,
+                                                           departure_location_ids = list(
+                                                             tract
+                                                           ),
+                         properties = list('travel_time', 'distance'),
+                                                           arrival_time = next_weekday(), 
+                                                           transportation = list(type = "driving")))
+```
+
+
+
+
+
+
+```{r}
+
+routes(
+    # departure_searches = departure_search_test,
+    arrival_searches = time_requests[[1]],
+    locations = locations_list_old
+  )
+```
+
+```{r}
+time_filter(
+    # departure_searches = departure_search_test,
+    arrival_searches = time_requests[[1]],
+    locations = locations_list_old
+  )
+```
+
+```{r}
+test_df = map(time_requests, \(request) get_routes(request, locations = locations_list_old)) |> 
+  list_rbind()
+```
+
+```{r}
+test_venue = venues |> 
+  filter(venue_location == "Universal Studios Lot")
+
+test_df |> 
+  mutate(time_mins = travel_time/60) |> 
+  right_join(nhgis_la_shp_subset, by = c("id" = "TRACTA")) |> 
+  ggplot()+
+  geom_sf(aes(geometry = geometry, fill = time_mins))+
+  geom_sf(data = test_venue, aes(geometry = venue_geometry), colour = "black", size = 2)+
+  scale_fill_viridis_c()+
+  coord_sf()+
+  theme_void()
+```
+```{r}
+test_df |> 
+  mutate(time_mins = travel_time/60) |> 
+  ggplot()+
+  geom_histogram(aes(x = time_mins), colour = "white")+
+  geom_vline(aes(xintercept = mean(time_mins)), colour = "red", linetype = "dashed")+
+  geom_text(aes(x = mean(time_mins), y = 200, label = round(mean(time_mins), 1)))+
+  labs(title = "Distribution of Travel Times to Universal Studios Lot",
+       x = "Travel Time (mins)",
+       y = "Density")+
+  theme_minimal()
+```
+
+Now collect the travel time data for each venue and each tract centroid.
+
+```{r}
+time_requests = venue_locations |> #sample_n(1) |> 
+  expand_grid(tract = map_chr(tract_ids, pluck)) |> 
+  # select(id) |> 
+  pmap(\(id, coords, tract) make_search(id = id, 
+                                        travel_time = 60*60*3, 
+                                        arrival_location_id = id,
+                                        coords = coords,
+                                        departure_location_ids = list(
+                                          tract
+                                          ),
+                                        properties = list('travel_time', 'distance'),
+                                        arrival_time = next_weekday(), 
+                                        transportation = list(type = "driving")))
+```
+
+
+```{r}
+driving_routes = map(time_requests, \(request) get_routes(request, locations = locations_list_old, sleep_time = 0.5)) |> 
+  list_rbind()
+```
+
+
+```{r}
+# Create a combination of venues and travel times for isochrone requests
+travel_times = 60*c(30, 60, 90, 120)
+
+iso_request_df = venues_iso |> 
+  expand_grid(travel_time = 60*c(30, 60, 90, 120),
+              time_of_day = c(9, 11, 13))
+
+glimpse(iso_request_df)
+```
+
+
+
+### Transit
+
+```{r}
+# Create a search object for each venue: public transport
+venues_iso_search = iso_request_df |> 
+  pmap(\(id, coords, travel_time, time_of_day) make_search(id = str_c(id, "_", travel_time), 
+                                              travel_time = travel_time, 
+                                              arrival_time = next_weekday(time_in_hrs = time_of_day),#"2024-12-18T09:00:00-08:00", 
+                                              coords = coords, 
+                                              transportation = list(type = "public_transport", 
+                                                                    walking_time=15*60, 
+                                                                    pt_change_delay = 120),
+                                              level_of_detail = list(scale_type = "simple", level = "medium")))
+```
+
+
