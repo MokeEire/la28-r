@@ -136,6 +136,48 @@ time_map_sf = function(arrival){
   
 }
 
+get_routes = function(search, locations, sleep_time = 1){
+  Sys.sleep(sleep_time)
+  # browser()
+  # tic(str_c("Get Routes: ", pluck(search, 1, "departure_location_ids", "departure_location_ids", 1), " to ", pluck(search, 1, "id")))
+  arrival_df = list_rbind(search) |> 
+    unnest_wider(transportation, names_sep = "_")
+  
+  # Call the API
+  routes_result = routes(
+    arrival_searches = search,
+    locations = locations
+  )
+  # browser()
+  result_df = routes_result$contentParsed$results[[1]]$locations |> 
+    map_depth(1, map_if, is_list, list_flatten) |> 
+    map_if(is_list, list_flatten, name_spec = "{inner}") |> 
+    map(as_tibble) |> 
+    list_rbind()
+
+
+
+  # toc()
+  if(arrival_df$transportation_type == "public_transport"){
+    mutate(result_df,
+           venue_id = arrival_df$id,
+           venue = str_extract(arrival_df$id, "([^_])+(?=_)"),
+           arrival_time = arrival_df$arrival_time,
+           transportation = arrival_df$transportation_type,
+           walking_time = arrival_df$transportation_walking_time,
+           pt_change_delay = arrival_df$transportation_pt_change_delay)
+  } else {
+    mutate(result_df,
+           venue_id = arrival_df$id,
+           arrival_time = arrival_df$arrival_time,
+           transportation = arrival_df$transportation_type,
+           walking_time = NA_real_,
+           pt_change_delay = NA_real_)
+  }
+  
+}
+
+
 # map isochrones function
 map_isochrones = function(data){
   ggplot(data)+
