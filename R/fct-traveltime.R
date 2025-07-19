@@ -1,3 +1,34 @@
+#' Return the date of the next weekday
+#'
+#' @param date 
+#' @param time_in_hrs 
+#' @param format_as_text 
+#'
+#' @returns
+#' @export
+#'
+#' @examples
+next_weekday = function(date = today(), time_in_hrs = 9, format_as_text = T){
+  dow = wday(date, week_start = 1)
+  
+  if(dow == 5){
+    new_date = date + days(3)
+  } else if(dow == 6){
+    new_date = date + days(2)
+  } else {
+    new_date = date + days(1)
+  }
+  
+  new_date_tz = force_tz(new_date+hours(time_in_hrs), tzone = "America/Los_Angeles")
+  
+  if(format_as_text){
+    format_ISO8601(new_date_tz, usetz=T)
+  } else {
+    new_date_tz
+  }
+  
+}
+
 #' Title
 #'
 #' @param arrival 
