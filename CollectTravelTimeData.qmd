@@ -78,6 +78,7 @@ ggplot(nhgis_shp) +
        subtitle = "Filtered to exclude Catalina Island, Angeles Forest, and Antelope Valley")+
   theme_void()
 ```
+
 Remove these tracts
 
 ```{r}
@@ -108,7 +109,6 @@ Okay so there are all our centroids, how many do we have in total?
 nrow(nhgis_centroids)
 ```
 
-
 Next, let's pull in the venues data
 
 ## Venues
@@ -127,6 +127,7 @@ How many requests will this be?
 ```{r}
 nrow(nhgis_centroids) * nrow(venues)
 ```
+
 To do this, we'll be using the Travel [Time Matrix API](https://docs.traveltime.com/api/start/travel-time-distance-matrix) from TravelTime.
 According to the documentation, a *request* is made up of up to 10 *searches*.
 Each search is either a one-to-many or many-to-one calculation which can include up to 100,000 locations.
@@ -140,6 +141,7 @@ Here is the example of the Time Matrix API request from [TravelTime's documentat
 
 ```{r}
 venues |> 
+  sample_n(1) |> 
   mutate(lat = st_coordinates(venue_geometry)[,2], 
          lng = st_coordinates(venue_geometry)[,1]) |> 
   st_drop_geometry() |>
@@ -216,7 +218,7 @@ venue_locations_old_list <- apply(venue_locations_old, 1, function(x)
   make_location(id = x['id'], coords = list(lat = as.numeric(x["lat"]),
                                             lng = as.numeric(x["lng"])))) |> 
   unlist(recursive=F)
-locations <- unlist(locations, recursive = FALSE)
+# locations <- unlist(locations, recursive = FALSE)
 
 venue_locations = venues |> 
   mutate(lat = st_coordinates(venue_geometry)[,2], 
@@ -247,7 +249,8 @@ tract_locations_old_list <- apply(tract_locations_old, 1, function(x)
                                             lng = as.numeric(x["lng"])))) |> 
   unlist(recursive=F)
 
-glimpse(tract_locations)
+head(tract_locations) |> glimpse()
+
 ```
 
 We can then combine the two dataframes and use `group_split()` to turn them into a list of dataframes, which we pass into the `make_location()` function.
@@ -256,7 +259,8 @@ We can then combine the two dataframes and use `group_split()` to turn them into
 locations_list = list_flatten(list(venue_locations, tract_locations))
 locations_list_old = list_flatten(list(venue_locations_old_list, tract_locations_old_list))
 
-glimpse(locations_list)
+head(locations_list) |> 
+  glimpse()
 ```
 
 
@@ -269,43 +273,43 @@ glimpse(departure_search)
 ```{r}
 tract_ids = map_depth(tract_locations, 2, "id") |> 
   list_simplify()
-venue_ids = map_depth(venue_locations, 2, "id") |> 
-  list_simplify()
+# venue_ids = map_depth(venue_locations_old, 2, "id") |> 
+#   list_simplify()
 
-departure_search_test = make_search(id = "departure search test",
-                                    departure_location_id = tract_ids,
-                                    arrival_location_ids = venue_ids[[1]],
-                                    departure_time = next_weekday(),
-                                    travel_time = 60*60*3, # 3 hrs
-                                    properties = list('travel_time', 'distance'),
-                                    transportation = list(type = "driving"))
+# departure_search_test = make_search(id = "departure search test",
+#                                     departure_location_id = tract_ids,
+#                                     arrival_location_ids = venue_ids[[1]],
+#                                     departure_time = next_weekday(),
+#                                     travel_time = 60*60*3, # 3 hrs
+#                                     properties = list('travel_time', 'distance'),
+#                                     transportation = list(type = "driving"))
+# 
+# arrival_search_test <-
+#   make_search(id = "arrival search test",
+#               arrival_location_id = venue_ids[[1]],
+#               departure_location_ids = tract_ids[[1]],
+#               arrival_time = next_weekday(),
+#               travel_time = 60*60*3,
+#               properties = list('travel_time', "distance"),
+#               transportation = list(type = "driving"))
 
-arrival_search_test <-
-  make_search(id = "arrival search test",
-              arrival_location_id = venue_ids[[1]],
-              departure_location_ids = tract_ids[[1]],
-              arrival_time = next_weekday(),
-              travel_time = 60*60*3,
-              properties = list('travel_time', "distance"),
-              transportation = list(type = "driving"))
-
-iso_request_df = venues_iso |> 
-  expand_grid(travel_time = 60*c(30, 60, 90, 120),
-              time_of_day = c(9, 11, 13))
+# iso_request_df = venues_iso |> 
+#   expand_grid(travel_time = 60*c(30, 60, 90, 120),
+#               time_of_day = c(9, 11, 13))
 
 time_requests = venue_locations |> sample_n(1) |> 
   expand_grid(tract = map_chr(tract_ids, pluck)) |> 
   # select(id) |> 
   pmap(\(id, coords, tract) make_search(id = id, 
-                                                           travel_time = 60*60*3, 
-                                 arrival_location_id = id,
-                                 coords = coords,
-                                                           departure_location_ids = list(
-                                                             tract
-                                                           ),
-                         properties = list('travel_time', 'distance'),
-                                                           arrival_time = next_weekday(), 
-                                                           transportation = list(type = "driving")))
+                                        travel_time = 60*60*3, 
+                                        arrival_location_id = id,
+                                        coords = coords,
+                                        departure_location_ids = list(
+                                          tract
+                                          ),
+                                        properties = list('travel_time', 'distance'),
+                                        arrival_time = next_weekday(), 
+                                        transportation = list(type = "driving")))
 ```
 
 
@@ -349,6 +353,7 @@ test_df |>
   coord_sf()+
   theme_void()
 ```
+
 ```{r}
 test_df |> 
   mutate(time_mins = travel_time/60) |> 
