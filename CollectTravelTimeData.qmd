@@ -371,9 +371,10 @@ Now collect the travel time data for each venue and each tract centroid.
 
 ```{r}
 time_requests = venue_locations |> #sample_n(1) |> 
+  filter(id == "Sepulveda Basin Recreation Area") |> 
   expand_grid(tract = map_chr(tract_ids, pluck)) |> 
   # select(id) |> 
-  pmap(\(id, coords, tract) make_search(id = id, 
+  pmap(\(id, coords, tract) make_search(id = str_c(id, " | ", tract), 
                                         travel_time = 60*60*3, 
                                         arrival_location_id = id,
                                         coords = coords,
@@ -385,22 +386,179 @@ time_requests = venue_locations |> #sample_n(1) |>
                                         transportation = list(type = "driving")))
 ```
 
+## Test out Time Filter (Fast) 
 
 ```{r}
-driving_routes = map(time_requests, \(request) get_routes(request, locations = locations_list_old, sleep_time = 0.5)) |> 
+arrival_search_test = make_search(id = "time filter test",
+            departure_location_ids = tract_ids,
+            arrival_location_id = venue_locations_old_list[[1]]$id,
+              arrival_time_period = "weekday_morning",
+            # arrival_time = next_weekday(),
+            travel_time = 60*60*3, # 3 hrs
+            properties = list("travel_time"),
+            transportation = list(type = "driving"))
+
+result = time_filter_fast(
+  arrival_many_to_one = arrival_search_test,
+  locations = locations_list_old
+)
+
+result_df = result$contentParsed$results[[1]]$locations |> 
+    map_depth(1, map_if, is_list, list_flatten) |> 
+    map_if(is_list, list_flatten, name_spec = "{inner}") |> 
+    map(as_tibble) |> 
+    list_rbind()
+```
+
+```{r}
+time_requests = venue_locations |> 
+  select(-coords) |> 
+  expand_grid(transportation_type = c("driving", "public_transport")) |>
+  pmap(\(id, transportation_type) make_search(id = str_c(id, " | ", transportation_type), 
+                         departure_location_ids = tract_ids,
+                         arrival_location_id = id,
+                         arrival_time_period = "weekday_morning",
+                         travel_time = 60*60*3, # 3 hrs
+                         properties = list("travel_time", "distance"),
+                         transportation = list(type = transportation_type, 
+                                               walking_time=15*60, 
+                                               pt_change_delay = 120)))
+
+# time_requests[[1]]
+
+# driving_times = map(time_requests, \(request) time_filter_fast_to_df(search = request, locations = locations_list_old))
+
+# list_rbind(driving_times)
+
+travel_times = map(time_requests, \(request) time_filter_fast_to_df(search = request, locations = locations_list_old, sleep_time = 0))
+
+list_rbind(travel_times) |> 
+  mutate(time_mins = travel_time/60,
+         distance_mi = distance/1609, .before = "travel_time") |> 
+  arrange(id, venue_id, transportation) |> 
+  View("Time Filter Fast")
+```
+
+Test out time filter
+
+```{r}
+travel_times2 = time_filter_to_df(venue_locations, tract_ids, locations_list_old, 0)
+
+# requests = venue_locations |> 
+#     select(-coords) |> 
+#     expand_grid(transportation_type = c("driving", "public_transport"), 
+#                 tract_list = list(tract_ids[1:length(tract_ids)/2], tract_ids[(length(tract_ids)/2)+1:length(tract_ids)])) |>
+#     pmap(\(id, transportation_type, tract_list) make_search(id = str_c(id, " | ", transportation_type), 
+#                                                             departure_location_ids = tract_list,
+#                                                             arrival_location_id = id,
+#                                                             arrival_time = next_weekday(),
+#                                                             travel_time = 60*60*3, # 3 hrs
+#                                                             properties = list("travel_time", "distance"),
+#                                                             transportation = list(type = transportation_type, 
+#                                                                                   walking_time=15*60, 
+#                                                                                   pt_change_delay = 120)))
+# 
+# map(requests, \(request) time_filter_fct(request, tract_ids, locations_list_old)) |> 
+#     list_rbind()
+# 
+# requests[[2]]
+
+travel_times2 |> 
+  # mutate(time_mins = travel_time/60,
+  #        distance_mi = distance/1609, .before = "travel_time") |> 
+  arrange(id, venue_id, transportation) |> 
+  View("Time Filter")
+```
+
+```{r}
+saveRDS(travel_times2, here("data", str_c("travel_times_", today(),".rds")))
+```
+
+```{r}
+travel_times2 |> #glimpse()
+  filter(str_detect(venue_id, "Sepulveda Basin Recreation Area")) |>
+  group_by(transportation) |> 
+  mutate(time_mins = if_else(transportation == "driving", time_mins*1.2, time_mins),
+         mean_time = mean(time_mins)) |> 
+  ungroup() |> 
+  filter(time_mins < 400) |> 
+  ggplot()+
+  geom_histogram(aes(x = time_mins, fill = transportation, y = stat(width*density)), 
+                 binwidth = 5,
+                 colour = "white")+
+  geom_vline(aes(xintercept = mean_time, colour = transportation), linetype = "dashed")+
+  scale_x_continuous(breaks = seq(0, 240, 30))+
+  scale_y_continuous(breaks = scales::breaks_pretty(), labels = scales::percent)+
+  # scale_alpha_discrete(breaks = c("driving", "public_transport"), range = c(1, .025))+
+  # geom_text(aes(x = mean_time, y = .3, label = round(mean_time, 1)))+
+  labs(title = "Distribution of Travel Times to Sepulveda Basin Recreation Area",
+       x = "Travel Time (mins)")+
+  # facet_grid(rows = vars(transportation), scales = "free_y", axes = "all_x",
+  #            switch = "y")+
+  theme_minimal()+
+  theme()
+```
+
+
+
+Compare results to Google Maps estimates
+
+```{r}
+results_diff = tribble(
+  ~from_tract, ~to_venue,                       ~transportation, ~method,   ~time_mins,
+  "101110",    "Arena Inglewood (Intuit Dome)", "driving",       "fast",    40,
+  "101110",    "Arena Inglewood (Intuit Dome)", "driving",       "normal",  39.8,
+  "101110",    "Arena Inglewood (Intuit Dome)", "driving",       "google",  75,
+  "101110",    "Arena Inglewood (Intuit Dome)", "transit",       "fast",    112.4,
+  "101110",    "Arena Inglewood (Intuit Dome)", "transit",       "normal",  144.9,
+  "101110",    "Arena Inglewood (Intuit Dome)", "transit",       "google",  135,
+  "101110",    "LA Live", "driving",       "fast",    24.3,
+  "101110",    "LA Live", "driving",       "normal",  24.9,
+  "101110",    "LA Live", "driving",       "google",  35,
+  "101110",    "LA Live", "transit",       "fast",    73.6,
+  "101110",    "LA Live", "transit",       "normal",  98.9,
+  "101110",    "LA Live", "transit",       "google",  97,
+  "190102",    "Dodger Stadium", "driving",       "fast",    9.1,
+  "190102",    "Dodger Stadium", "driving",       "normal",    17.1,
+  "190102",    "Dodger Stadium", "driving",       "google",    35,
+  "190102",    "Dodger Stadium", "transit",       "fast",    46.2,
+  "190102",    "Dodger Stadium", "transit",       "normal",    54.9,
+  "190102",    "Dodger Stadium", "transit",       "google",    61,
+  "199400",    "Arena Inglewood (Intuit Dome)", "driving",       "fast",    24.5,
+  "199400",    "Arena Inglewood (Intuit Dome)", "driving",       "normal",  25,
+  "199400",    "Arena Inglewood (Intuit Dome)", "driving",       "google",  45,
+  "199400",    "Arena Inglewood (Intuit Dome)", "transit",       "fast",    83.3,
+  "199400",    "Arena Inglewood (Intuit Dome)", "transit",       "normal",  86.8,
+  "199400",    "Arena Inglewood (Intuit Dome)", "transit",       "google",  88,
+  "199400",    "Belmont Shore", "driving",       "fast",  39.3,
+  "199400",    "Belmont Shore", "driving",       "normal", 40.7,
+  "199400",    "Belmont Shore", "driving",       "google", 50,
+  "199400",    "Belmont Shore", "transit",       "fast", 122.4,
+  "199400",    "Belmont Shore", "transit",       "normal", 111,
+  "199400",    "Belmont Shore", "transit",       "google", 112
+  
+  
+)
+```
+
+
+```{r}
+driving_routes = map(time_requests, \(request) get_routes(request, locations = locations_list_old, sleep_time = .8)) |> 
   list_rbind()
 ```
 
 
 ```{r}
-# Create a combination of venues and travel times for isochrone requests
-travel_times = 60*c(30, 60, 90, 120)
-
-iso_request_df = venues_iso |> 
-  expand_grid(travel_time = 60*c(30, 60, 90, 120),
-              time_of_day = c(9, 11, 13))
-
-glimpse(iso_request_df)
+driving_routes |> 
+  mutate(time_mins = travel_time/60) |> 
+  ggplot()+
+  geom_histogram(aes(x = time_mins), colour = "white")+
+  geom_vline(aes(xintercept = mean(time_mins)), colour = "red", linetype = "dashed")+
+  geom_text(aes(x = mean(time_mins), y = 200, label = round(mean(time_mins), 1)))+
+  labs(title = "Distribution of Travel Times to Sepulveda Basin Recreation Area",
+       x = "Travel Time (mins)",
+       y = "Density")+
+  theme_minimal()
 ```
 
 
@@ -409,15 +567,115 @@ glimpse(iso_request_df)
 
 ```{r}
 # Create a search object for each venue: public transport
-venues_iso_search = iso_request_df |> 
-  pmap(\(id, coords, travel_time, time_of_day) make_search(id = str_c(id, "_", travel_time), 
-                                              travel_time = travel_time, 
-                                              arrival_time = next_weekday(time_in_hrs = time_of_day),#"2024-12-18T09:00:00-08:00", 
-                                              coords = coords, 
-                                              transportation = list(type = "public_transport", 
+transit_time_requests = venue_locations |> #sample_n(1) |> 
+  filter(id == "Sepulveda Basin Recreation Area") |> 
+  expand_grid(tract = map_chr(tract_ids, pluck)) |> 
+  # select(id) |> 
+  pmap(\(id, coords, tract) make_search(id = str_c(id, " | ", tract), 
+                                        travel_time = 60*60*3, 
+                                        arrival_location_id = id,
+                                        coords = coords,
+                                        departure_location_ids = list(
+                                          tract
+                                          ),
+                                        properties = list('travel_time', 'distance'),
+                                        arrival_time = next_weekday(), 
+                                        transportation = list(type = "public_transport", 
                                                                     walking_time=15*60, 
-                                                                    pt_change_delay = 120),
-                                              level_of_detail = list(scale_type = "simple", level = "medium")))
+                                                                    pt_change_delay = 120)))
 ```
+
+```{r}
+transit_routes = map(transit_time_requests, \(request) get_routes(request, locations = locations_list_old, sleep_time = .8)) |> 
+  list_rbind()
+```
+
+```{r}
+transit_routes |> 
+  mutate(time_mins = travel_time/60) |> 
+  ggplot()+
+  geom_histogram(aes(x = time_mins), colour = "white")+
+  geom_vline(aes(xintercept = mean(time_mins)), colour = "red", linetype = "dashed")+
+  geom_text(aes(x = mean(time_mins), y = 200, label = round(mean(time_mins), 1)))+
+  labs(title = "Distribution of Transit Times to Sepulveda Basin Recreation Area",
+       x = "Travel Time (mins)")+
+  theme_minimal()
+```
+
+
+```{r}
+routes_combined = list_rbind(list(driving_routes, transit_routes))
+
+routes_combined |> 
+  group_by(transportation) |> 
+  mutate(time_mins = travel_time/60,
+         mean_time = mean(time_mins)) |> 
+  ungroup() |> 
+  filter(time_mins < 400) |> 
+  ggplot()+
+  geom_histogram(aes(x = time_mins, fill = transportation, y = stat(width*density)), 
+                 binwidth = 5,
+                 colour = "white")+
+  geom_vline(aes(xintercept = mean_time, fill = transportation), colour = "red", linetype = "dashed")+
+  scale_x_continuous(breaks = seq(0, 240, 30))+
+  scale_y_continuous(breaks = scales::breaks_pretty(), labels = scales::percent)+
+  # geom_text(aes(x = mean_time, y = .3, label = round(mean_time, 1)))+
+  labs(title = "Distribution of Travel Times to Sepulveda Basin Recreation Area",
+       x = "Travel Time (mins)")+
+  facet_grid(rows = vars(transportation), scales = "free_y", axes = "all_x",
+             switch = "y")+
+  theme_minimal()+
+  theme()
+```
+
+```{r}
+routes_combined |> 
+  glimpse()
+```
+
+Gather all the requests in one object
+
+```{r}
+driving_time_requests = venue_locations |> #sample_n(1) |> 
+  expand_grid(tract = map_chr(tract_ids, pluck)) |> 
+  # select(id) |> 
+  pmap(\(id, coords, tract) make_search(id = str_c(id, " | ", tract, " | driving"), 
+                                        travel_time = 60*60*3, 
+                                        arrival_location_id = id,
+                                        coords = coords,
+                                        departure_location_ids = list(
+                                          tract
+                                          ),
+                                        properties = list('travel_time', 'distance'),
+                                        arrival_time = next_weekday(), 
+                                        transportation = list(type = "driving")))
+
+# Create a search object for each venue: public transport
+transit_time_requests = venue_locations |> #sample_n(1) |> 
+  expand_grid(tract = map_chr(tract_ids, pluck)) |> 
+  # select(id) |> 
+  pmap(\(id, coords, tract) make_search(id = str_c(id, " | ", tract, " | transit"), 
+                                        travel_time = 60*60*3, 
+                                        arrival_location_id = id,
+                                        coords = coords,
+                                        departure_location_ids = list(
+                                          tract
+                                          ),
+                                        properties = list('travel_time', 'distance'),
+                                        arrival_time = next_weekday(), 
+                                        transportation = list(type = "public_transport", 
+                                                                    walking_time=15*60, 
+                                                                    pt_change_delay = 120)))
+
+```
+
+```{r}
+driving_routes = map(driving_time_requests, \(request) get_routes(request, locations = locations_list_old, sleep_time = 1), .progress = T) |> 
+  list_rbind()
+
+transit_routes = map(transit_time_requests, \(request) get_routes(request, locations = locations_list_old, sleep_time = .8)) |> 
+  list_rbind()
+```
+
 
 
