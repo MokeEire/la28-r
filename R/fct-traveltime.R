@@ -177,6 +177,116 @@ get_routes = function(search, locations, sleep_time = 1){
   
 }
 
+time_filter_fast_to_df = function(search, locations, sleep_time = 1){
+  Sys.sleep(sleep_time)
+  # browser()
+  tictoc::tic(str_c("Travel Times: ", pluck(search, 1, "id")))
+  arrival_df = list_rbind(search) |> 
+    unnest_wider(transportation, names_sep = "_")
+  
+  # Call the API
+  routes_result = time_filter_fast(
+    arrival_many_to_one = search,
+    locations = locations
+  )
+  # browser()
+  result_df = routes_result$contentParsed$results[[1]]$locations |> 
+    map_depth(1, map_if, is_list, list_flatten) |> 
+    map_if(is_list, list_flatten, name_spec = "{inner}") |> 
+    map(as_tibble) |> 
+    list_rbind()
+  
+  
+  
+  tictoc::toc()
+  if(arrival_df$transportation_type == "public_transport"){
+    mutate(result_df,
+           venue_id = arrival_df$id,
+           arrival_time_period = arrival_df$arrival_time_period,
+           transportation = arrival_df$transportation_type,
+           walking_time = arrival_df$transportation_walking_time,
+           pt_change_delay = arrival_df$transportation_pt_change_delay)
+  } else {
+    mutate(result_df,
+           venue_id = arrival_df$id,
+           arrival_time_period = arrival_df$arrival_time_period,
+           transportation = arrival_df$transportation_type,
+           walking_time = NA_real_,
+           pt_change_delay = NA_real_)
+  }
+  
+}
+
+time_filter_to_df = function(venues, tract_ids, locations, sleep_time = 1){
+  Sys.sleep(sleep_time)
+  # browser()
+  tract_count = length(tract_ids)
+  tract_ids1 = tract_ids[1:(tract_count/2)]
+  tract_ids2 = tract_ids[((tract_count/2)+1):tract_count]
+  
+  time_requests = venues |> 
+    select(-coords) |> 
+    expand_grid(transportation_type = c("driving", "public_transport"), 
+                tract_list = list(tract_ids1, tract_ids2)) |>
+    mutate(tract_list_count = rep_len(1:2, n())) |> 
+    pmap(\(id, transportation_type, tract_list, tract_list_count) make_search(id = str_c(id, " ", tract_list_count, " | ", transportation_type), 
+                                                            departure_location_ids = tract_list,
+                                                            arrival_location_id = id,
+                                                            arrival_time = next_weekday(time_in_hrs = 10),
+                                                            travel_time = 60*60*3, # 3 hrs
+                                                            properties = list("travel_time", "distance"),
+                                                            transportation = list(type = transportation_type, 
+                                                                                  walking_time=15*60, 
+                                                                                  cycling_time_to_station = 15*60,
+                                                                                  pt_change_delay = 120,
+                                                                                  parking_time = 600,
+                                                                                  traffic_model = "pessimistic"),
+                                                            snapping = list(threshold = 250)))
+  
+  map(time_requests, \(request) time_filter_fct(search = request, locations)) |> 
+    list_rbind() |> 
+    mutate(time_mins = travel_time/60,
+           distance_mi = distance/1609, .before = "travel_time")
+  
+  
+}
+
+time_filter_fct = function(search, locations){
+  tictoc::tic(str_c("Travel Times: ", pluck(search, 1, "id")))
+  arrival_df = list_rbind(search) |> 
+    unnest_wider(transportation, names_sep = "_")
+  # browser()
+  # Call the API
+  routes_result = time_filter(
+    arrival_searches = search,
+    locations = locations
+  )
+  # browser()
+  result_df = routes_result$contentParsed$results[[1]]$locations |> 
+    map_depth(1, map_if, is_list, list_flatten) |> 
+    map_if(is_list, list_flatten, name_spec = "{inner}") |> 
+    map(as_tibble) |> 
+    list_rbind()
+  
+  
+  
+  tictoc::toc()
+  if(arrival_df$transportation_type == "public_transport"){
+    mutate(result_df,
+           venue_id = arrival_df$id,
+           arrival_time = arrival_df$arrival_time,
+           transportation = arrival_df$transportation_type,
+           walking_time = arrival_df$transportation_walking_time,
+           pt_change_delay = arrival_df$transportation_pt_change_delay)
+  } else {
+    mutate(result_df,
+           venue_id = arrival_df$id,
+           arrival_time = arrival_df$arrival_time,
+           transportation = arrival_df$transportation_type,
+           walking_time = NA_real_,
+           pt_change_delay = NA_real_)
+  }
+}
 
 # map isochrones function
 map_isochrones = function(data){
