@@ -239,9 +239,8 @@ time_filter_to_df = function(venues, tract_ids, locations, sleep_time = 1){
                                                                                   walking_time=15*60, 
                                                                                   cycling_time_to_station = 15*60,
                                                                                   pt_change_delay = 120,
-                                                                                  parking_time = 600,
-                                                                                  traffic_model = "pessimistic"),
-                                                            snapping = list(threshold = 250)))
+                                                                                  parking_time = 300,
+                                                                                  traffic_model = "pessimistic")))
   
   map(time_requests, \(request) time_filter_fct(search = request, locations)) |> 
     list_rbind() |> 
