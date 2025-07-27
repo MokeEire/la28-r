@@ -505,38 +505,18 @@ Compare results to Google Maps estimates
 
 ```{r}
 results_diff = tribble(
-  ~from_tract, ~to_venue,                       ~transportation, ~method,   ~time_mins,
-  "101110",    "Arena Inglewood (Intuit Dome)", "driving",       "fast",    40,
-  "101110",    "Arena Inglewood (Intuit Dome)", "driving",       "normal",  39.8,
-  "101110",    "Arena Inglewood (Intuit Dome)", "driving",       "google",  75,
-  "101110",    "Arena Inglewood (Intuit Dome)", "transit",       "fast",    112.4,
-  "101110",    "Arena Inglewood (Intuit Dome)", "transit",       "normal",  144.9,
-  "101110",    "Arena Inglewood (Intuit Dome)", "transit",       "google",  135,
-  "101110",    "LA Live", "driving",       "fast",    24.3,
-  "101110",    "LA Live", "driving",       "normal",  24.9,
-  "101110",    "LA Live", "driving",       "google",  35,
-  "101110",    "LA Live", "transit",       "fast",    73.6,
-  "101110",    "LA Live", "transit",       "normal",  98.9,
-  "101110",    "LA Live", "transit",       "google",  97,
-  "190102",    "Dodger Stadium", "driving",       "fast",    9.1,
-  "190102",    "Dodger Stadium", "driving",       "normal",    17.1,
-  "190102",    "Dodger Stadium", "driving",       "google",    35,
-  "190102",    "Dodger Stadium", "transit",       "fast",    46.2,
-  "190102",    "Dodger Stadium", "transit",       "normal",    54.9,
-  "190102",    "Dodger Stadium", "transit",       "google",    61,
-  "199400",    "Arena Inglewood (Intuit Dome)", "driving",       "fast",    24.5,
-  "199400",    "Arena Inglewood (Intuit Dome)", "driving",       "normal",  25,
-  "199400",    "Arena Inglewood (Intuit Dome)", "driving",       "google",  45,
-  "199400",    "Arena Inglewood (Intuit Dome)", "transit",       "fast",    83.3,
-  "199400",    "Arena Inglewood (Intuit Dome)", "transit",       "normal",  86.8,
-  "199400",    "Arena Inglewood (Intuit Dome)", "transit",       "google",  88,
-  "199400",    "Belmont Shore", "driving",       "fast",  39.3,
-  "199400",    "Belmont Shore", "driving",       "normal", 40.7,
-  "199400",    "Belmont Shore", "driving",       "google", 50,
-  "199400",    "Belmont Shore", "transit",       "fast", 122.4,
-  "199400",    "Belmont Shore", "transit",       "normal", 111,
-  "199400",    "Belmont Shore", "transit",       "google", 112
-  
+  ~from_tract, ~to_venue,                       ~transportation, ~fast, ~normal, ~google,
+  "101110",    "Arena Inglewood (Intuit Dome)", "driving",       40, 39.8, 75,
+  "101110",    "Arena Inglewood (Intuit Dome)", "transit",       112.4,  144.9,  135,
+  "101110",    "LA Live",  "driving",       24.3,  24.9,  35,
+  "101110",    "LA Live",  "transit",       73.6,  98.9,  97,
+  "190102",    "Dodger Stadium", "driving",       9.1,    17.1,    35,
+  "190102",    "Dodger Stadium", "transit",       46.2,    54.9,    61,
+  "199400",    "Arena Inglewood (Intuit Dome)", "driving",       24.5,  25,  45,
+  "199400",    "Arena Inglewood (Intuit Dome)", "transit",       83.3,  86.8,  88,
+  "199400",    "Belmont Shore", "driving",       39.3, 40.7, 50,
+  "199400",    "Belmont Shore", "transit",       122.4, 111, 112,
+
   
 )
 ```
