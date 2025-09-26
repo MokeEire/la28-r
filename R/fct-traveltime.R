@@ -217,36 +217,54 @@ time_filter_fast_to_df = function(search, locations, sleep_time = 1){
   
 }
 
-time_filter_to_df = function(venues, tract_ids, locations, sleep_time = 1, traffic_model = "pessimistic"){
+time_filter_to_df = function(
+    venues, 
+    tract_ids, 
+    locations, 
+    sleep_time = 1, 
+    traffic_model = "pessimistic", 
+    transportation_opts = list(walking_time=15*60, 
+                               cycling_time_to_station = 15*60,
+                               pt_change_delay = 60,
+                               parking_time = 900,
+                               traffic_model = "pessimistic")){
   Sys.sleep(sleep_time)
   # browser()
+  # Split tracts into two groups to avoid hitting API limits
   tract_count = length(tract_ids)
+  # index 1 to n/2
   tract_ids1 = tract_ids[1:(tract_count/2)]
+  # index (n/2)+1 to n
   tract_ids2 = tract_ids[((tract_count/2)+1):tract_count]
   
-  time_requests = venues |> 
+  time_requests = list_rbind(venues) |> 
     select(-coords) |> 
+    # Create all combinations of venues, transportation types and tract groups
     expand_grid(transportation_type = c("driving", "public_transport"), 
                 tract_list = list(tract_ids1, tract_ids2)) |>
     mutate(tract_list_count = rep_len(1:2, n())) |> 
-    pmap(\(id, transportation_type, tract_list, tract_list_count) make_search(id = str_c(id, " | Group ", tract_list_count, " | ", transportation_type), 
-                                                            departure_location_ids = tract_list,
-                                                            arrival_location_id = id,
-                                                            arrival_time = next_weekday(time_in_hrs = 10),
-                                                            travel_time = 60*60*3, # 3 hrs
-                                                            properties = list("travel_time", "distance"),
-                                                            transportation = list(type = transportation_type, 
-                                                                                  walking_time=15*60, 
-                                                                                  cycling_time_to_station = 15*60,
-                                                                                  pt_change_delay = 60,
-                                                                                  parking_time = 900,
-                                                                                  traffic_model = traffic_model),
-                                                            snapping = list(threshold = 250)))
+    # Create a separate API request for each combination
+    pmap(\(id, transportation_type, tract_list, tract_list_count){
+      make_search(id = str_c(id, " | Group ", tract_list_count, " | ", transportation_type), 
+                  departure_location_ids = tract_list,
+                  arrival_location_id = id,
+                  arrival_time = next_weekday(time_in_hrs = 10),
+                  travel_time = 60*60*3, # 3 hrs
+                  properties = list("travel_time", "distance"),
+                  transportation = list(type = transportation_type, 
+                                        walking_time= transportation_opts$walking_time, 
+                                        cycling_time_to_station = transportation_opts$cycling_time_to_station,
+                                        pt_change_delay = transportation_opts$pt_change_delay,
+                                        parking_time = transportation_opts$parking_time,
+                                        traffic_model = transportation_opts$traffic_model),
+                  snapping = list(threshold = 250))
+    } )
   
-  
-  map(time_requests, \(request) time_filter_fct(search = request, locations)) |> 
+  # Make API requests and combine results
+  map(time_requests, \(request) time_filter_fct(search = request, locations = locations)) |> 
     list_rbind() |> 
-    mutate(venue = str_extract(venue_id, ".+(?=\\|)"),
+    # Extract venue from API request ID and calculate time and distance in more useful units
+    mutate(venue = str_extract(venue_id, "[^\\|]+(?=\\s\\|)"),
            time_mins = travel_time/60,
            distance_mi = distance/1609, .before = "travel_time")
   
