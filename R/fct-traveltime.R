@@ -217,7 +217,7 @@ time_filter_fast_to_df = function(search, locations, sleep_time = 1){
   
 }
 
-time_filter_to_df = function(venues, tract_ids, locations, sleep_time = 1){
+time_filter_to_df = function(venues, tract_ids, locations, sleep_time = 1, traffic_model = "pessimistic"){
   Sys.sleep(sleep_time)
   # browser()
   tract_count = length(tract_ids)
@@ -229,7 +229,7 @@ time_filter_to_df = function(venues, tract_ids, locations, sleep_time = 1){
     expand_grid(transportation_type = c("driving", "public_transport"), 
                 tract_list = list(tract_ids1, tract_ids2)) |>
     mutate(tract_list_count = rep_len(1:2, n())) |> 
-    pmap(\(id, transportation_type, tract_list, tract_list_count) make_search(id = str_c(id, " ", tract_list_count, " | ", transportation_type), 
+    pmap(\(id, transportation_type, tract_list, tract_list_count) make_search(id = str_c(id, " | Group ", tract_list_count, " | ", transportation_type), 
                                                             departure_location_ids = tract_list,
                                                             arrival_location_id = id,
                                                             arrival_time = next_weekday(time_in_hrs = 10),
@@ -238,13 +238,16 @@ time_filter_to_df = function(venues, tract_ids, locations, sleep_time = 1){
                                                             transportation = list(type = transportation_type, 
                                                                                   walking_time=15*60, 
                                                                                   cycling_time_to_station = 15*60,
-                                                                                  pt_change_delay = 120,
-                                                                                  parking_time = 300,
-                                                                                  traffic_model = "pessimistic")))
+                                                                                  pt_change_delay = 60,
+                                                                                  parking_time = 900,
+                                                                                  traffic_model = traffic_model),
+                                                            snapping = list(threshold = 250)))
+  
   
   map(time_requests, \(request) time_filter_fct(search = request, locations)) |> 
     list_rbind() |> 
-    mutate(time_mins = travel_time/60,
+    mutate(venue = str_extract(venue_id, ".+(?=\\|)"),
+           time_mins = travel_time/60,
            distance_mi = distance/1609, .before = "travel_time")
   
   
