@@ -58,7 +58,7 @@ nhgis_la_shp_subset = nhgis_la_shp |>
   filter(st_coordinates(st_centroid(geometry))[,2] < 34.35) |> 
   st_as_sf()
 
-glimpse(nhgis_la_shp_subset)
+# glimpse(nhgis_la_shp_subset)
 
 
 
@@ -79,7 +79,7 @@ iso_request_df = venues_iso |>
   expand_grid(travel_time = 60*c(30, 60, 90, 120),
               time_of_day = c(9, 11, 13))
 
-glimpse(iso_request_df)
+# glimpse(iso_request_df)
 
 
 ## Transit -----------------------------------------------------------------
@@ -147,6 +147,10 @@ toc()
 # Join Population Data ----------------------------------------------------
 
 tic("Join Population Data")
+
+# Prevent invalid loop error: https://github.com/r-spatial/sf/issues/1762
+sf_use_s2(FALSE)
+
 ## Transit -----------------------------------------------------------------
 
 # Combine multiple polygons per Venue/Time into one MultiPolygon
@@ -172,7 +176,7 @@ isochrones_transit_pop_pct = isochrones_transit_pop |>
             pop_pct = pop/total_population, .groups = "drop")
 
 # Join pop % data with isochrones
-isochrones_transit_output = left_join(isochrones_transit_combined,
+isochrones_transit_sf = left_join(isochrones_transit_combined,
                                       isochrones_transit_pop_pct,
                                  by = c("venue", "venues", "travel_time", "travel_time_mins", "transportation", "arrival_time"))
 
@@ -199,7 +203,7 @@ isochrones_drive_pop_pct = isochrones_drive_pop |>
             pop_pct = pop/total_population, .groups = "drop")
 
 # Join pop % data with isochrones
-isochrones_drive_output = left_join(isochrones_drive_combined,
+isochrones_drive_sf = left_join(isochrones_drive_combined,
                                       isochrones_drive_pop_pct,
                                       by = c("venue", "venues", "travel_time", "travel_time_mins", "transportation", "walking_time", "pt_change_delay", "arrival_time"))
 
@@ -207,16 +211,27 @@ toc()
 
 # Write Data --------------------------------------------------------------
 
+# glimpse(isochrones_transit_output)
+
+isochrones_transit_output = isochrones_transit_sf |> 
+  filter(ymd_hms(arrival_time) == min(ymd_hms(arrival_time))) |> 
+  select(venue, venues, travel_time, travel_time_mins, arrival_time, pop_pct, geometry)
+
 tic("Writing Data")
 st_write(isochrones_transit_output, 
          here("output", str_c("isochronesTransit", today(), ".geojson.json")), 
          driver = "GeoJSON", append = F)
 
+
+isochrones_drive_output = isochrones_drive_sf |> 
+  filter(ymd_hms(arrival_time) == min(ymd_hms(arrival_time))) |> 
+  select(venue, venues, travel_time, travel_time_mins, arrival_time, pop_pct, geometry)
+
 st_write(isochrones_drive_output, 
          here("output", str_c("isochronesDrive", today(), ".geojson.json")), 
          driver = "GeoJSON", append = F)
 
-isochrones_df = list_rbind(list(isochrones_transit_output, isochrones_drive_output))
+isochrones_df = list_rbind(list(isochrones_transit_sf, isochrones_drive_sf))
 saveRDS(isochrones_df, here("output", str_c("isochrones", today(), ".Rds")))
 
 toc()
