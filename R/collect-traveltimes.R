@@ -90,6 +90,7 @@ travel_times |>
 # Save travel times file as: data/traveltime/travel_times_YYYY-MM-DD.rds
 
 saveRDS(travel_times, here("data", "traveltime", str_c("travel_times_", today(),".rds")))
+saveRDS(travel_times, here("data", "traveltime", str_c("travel_times_current.rds")))
 
 # Plot
 
