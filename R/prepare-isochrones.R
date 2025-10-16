@@ -232,6 +232,6 @@ st_write(isochrones_drive_output,
          driver = "GeoJSON", append = F)
 
 isochrones_df = list_rbind(list(isochrones_transit_sf, isochrones_drive_sf))
-saveRDS(isochrones_df, here("output", str_c("isochrones", today(), ".Rds")))
+saveRDS(isochrones_df, here("data", "isochrones", str_c("isochrones", today(), ".Rds")))
 
 toc()
