@@ -58,6 +58,12 @@ nhgis_la_shp_subset = nhgis_la_shp |>
   filter(st_coordinates(st_centroid(geometry))[,2] < 34.35) |> 
   st_as_sf()
 
+nhgis_tracts_output = nhgis_la_shp_subset |> 
+  select(TRACTA, POPULATION, geometry) |> 
+  st_simplify(dTolerance = 10)
+
+st_write(nhgis_tracts_output, here("data", "census_tracts.geojson.json"), driver = "GeoJSON", delete_dsn = T, append = F)
+
 # glimpse(nhgis_la_shp_subset)
 
 
@@ -213,23 +219,35 @@ toc()
 
 # glimpse(isochrones_transit_output)
 
+# Transit isocrhones
 isochrones_transit_output = isochrones_transit_sf |> 
   filter(ymd_hms(arrival_time) == min(ymd_hms(arrival_time))) |> 
-  select(venue, venues, travel_time, travel_time_mins, arrival_time, pop_pct, geometry)
+  select(venue, venues, travel_time, pop_pct, geometry) |> 
+  st_simplify(dTolerance = 200)
 
 tic("Writing Data")
+# Save to geojson
 st_write(isochrones_transit_output, 
          here("output", str_c("isochronesTransit", today(), ".geojson.json")), 
          driver = "GeoJSON", append = F)
+st_write(isochrones_transit_output, 
+         here("output", str_c("isochronesTransitCurrent.geojson.json")), 
+         driver = "GeoJSON", append = F, delete_dsn = T)
 
-
+# Driving isochrones
 isochrones_drive_output = isochrones_drive_sf |> 
   filter(ymd_hms(arrival_time) == min(ymd_hms(arrival_time))) |> 
-  select(venue, venues, travel_time, travel_time_mins, arrival_time, pop_pct, geometry)
+  select(venue, venues, travel_time, pop_pct, geometry) |> 
+  st_simplify(dTolerance = 250)
 
+# Save to geojson
 st_write(isochrones_drive_output, 
          here("output", str_c("isochronesDrive", today(), ".geojson.json")), 
-         driver = "GeoJSON", append = F)
+         driver = "GeoJSON", append = F, delete_dsn = T)
+st_write(isochrones_drive_output, 
+         here("output", str_c("isochronesDriveCurrent.geojson.json")), 
+         driver = "GeoJSON", append = F, delete_dsn = T)
+
 
 isochrones_df = list_rbind(list(isochrones_transit_sf, isochrones_drive_sf))
 saveRDS(isochrones_df, here("data", "isochrones", str_c("isochrones", today(), ".Rds")))
