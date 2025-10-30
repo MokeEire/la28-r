@@ -39,6 +39,62 @@ venues = read_rds(here("data", "venues_complete.rds"))
 glimpse(venues)
 ```
 
+## Census Tracts
+
+
+```{r}
+# 2020 population by census tract from: https://www.nhgis.org/
+nhgis_file = here("data", "nhgis", "nhgis0001_ds258_2020_tract.csv")
+
+nhgis = read_csv(nhgis_file)
+
+# Filter for LA County
+nhgis_la = nhgis |> 
+  filter(STATE == "California", COUNTY == "Los Angeles County") |> 
+  mutate(AREALAND_SQKM = AREALAND/1e6,
+         AREALAND_SQMI = AREALAND_SQKM/2.59,
+         .after = "AREALAND") |> 
+  select(GISJOIN, YEAR, TRACTA, POPULATION = U7H001, AREALAND_SQKM, AREALAND_SQMI)
+
+# Census tract shapefiles
+nhgis_shp_file = here("data", "nhgis", "US_tract_2020.shp")
+
+# Reproject CRS to WGS84
+nhgis_shp = st_read(nhgis_shp_file) |> 
+  st_transform(crs = "EPSG:4326")
+
+```
+
+
+Create an opinionated subset of Los Angeles tracts that make up the area of LA where transportation to venues is relevant.
+
+Exclude Catalina Island (tract 5991) and the area north of the San Gabriel Mountains (tract 9304).
+Also exclude tracts that are north of the 34.35 latitude: functionally Santa Clarita and above.
+
+```{r}
+# Join tract population and GIS data
+nhgis_la_shp = inner_join(nhgis_la, nhgis_shp, by = "GISJOIN")
+
+# Create list of tracts to exclude
+exclude_tracts = tribble(
+  ~TRACTCE,
+  "599100", # Catalina Island
+  "599000", # Catalina Island
+  "930400" # Angeles Forest
+)
+
+# Create an opinionated subset of LA tracts
+nhgis_la_shp_subset = nhgis_la_shp |> 
+  anti_join(exclude_tracts, by = "TRACTCE") |>
+  # Remove tracts where the centroid is north of 34.35
+  filter(st_coordinates(st_centroid(geometry))[,2] < 34.35) |>
+  st_as_sf()
+
+glimpse(nhgis_la_shp_subset)
+
+# st_write(nhgis_la_shp_subset, here("data", "nhgis_la_subset.geojson.json"), driver = "GeoJSON")
+```
+
 ## Travel Times
 
 ```{r}
@@ -157,6 +213,58 @@ tt_plot = travel_times_pivot |>
         axis.text.y = element_text(margin = margin(r=5), size = 10))
 
 ggsave(plot = tt_plot, here("output", str_c("plot_travel_time_comparison_", today(), ".png")), width = 18, height = 10, dpi = 320, bg = "white")
+```
+
+```{r}
+tt_plot
+```
+
+
+For each tract, what is the average travel time for driving and transit?
+
+```{r}
+travel_times_summary_stats = travel_times_pivot |> 
+  # filter(id == "101122") |>
+  # arrange(public_transport)
+  # mutate(public_transport = if_else(is.nan(public_transport), NA_real_, public_transport)) |> 
+  group_by(id) |> 
+  # summarise(across(c(driving, public_transport), \(x) mean(x, na.rm = T))) |> 
+  summarise(across(c(driving, public_transport), list(mean = \(x) mean(x, na.rm = T),
+                                                      median = \(x) median(x, na.rm = T),
+                                                      min = \(x) min(x, na.rm = T),
+                                                      max = \(x) max(x, na.rm = T)), .names = "{.fn}_{.col}"), .groups = "drop") |>
+  pivot_longer(cols = !id, names_to = c("stat", "transportation"), names_sep = "(?<=m[a-z]{2,5})_", values_to = "time_mins")
+
+nhgis_la_shp_subset |> 
+  select(GISJOIN, TRACTA, geometry) |> 
+  expand_grid(transportation = c("driving", "public_transport"), stat = c("mean", "median", "min", "max")) |> 
+  left_join(travel_times_summary_stats, by = c("TRACTA" = "id", "transportation" = "transportation", "stat" = "stat")) |>
+  ggplot(aes(fill = time_mins))+
+  geom_sf(aes(geometry = geometry))+
+  scale_fill_viridis_b(direction = -1, nice.breaks = T)+
+  facet_grid(rows = vars(transportation), cols = vars(stat))+
+  theme_void()
+```
+
+What does the map look like for one venue?
+
+```{r}
+one_venue_df = travel_times |> 
+  filter(venue == sample(venue, 1)) |> 
+  inner_join(venues, by = c("venue" = "venue_location"))
+
+nhgis_la_shp_subset |> 
+  select(GISJOIN, TRACTA, geometry) |> 
+  expand_grid(transportation = c("driving", "public_transport")) |> 
+  left_join(one_venue_df, by = c("TRACTA" = "id", "transportation" = "transportation")) |> 
+  ggplot(aes(fill = time_mins))+
+  geom_sf(aes(geometry = geometry))+
+  geom_sf(aes(geometry = venue_geometry), size = 4)+
+  geom_sf_text(aes(geometry = venue_geometry, label = venue), nudge_y = -0.05, size = 5, hjust = 1)+
+  # scale_fill_viridis_b(direction = -1, option = "C", nice.breaks = T)+
+  scale_fill_distiller(name = NULL, type = "div", palette = 8)+
+  facet_wrap(~transportation)+
+  theme_void()
 ```
 
 

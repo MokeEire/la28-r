@@ -246,12 +246,17 @@ tract_locations_old = nhgis_centroids |>
 
 tract_locations_old_list <- apply(tract_locations_old, 1, function(x)
   make_location(id = x['id'], coords = list(lat = as.numeric(x["lat"]),
-                                            lng = as.numeric(x["lng"])))) |> 
+                                            lng = as.numeric(x["lng"])))) |> glimpse()
   unlist(recursive=F)
 
-head(tract_locations) |> glimpse()
+head(tract_locations) |> unlist(recursive=F) |> str()
 
 ```
+
+```{r}
+head(tract_locations_old_list) |> str()
+```
+
 
 We can then combine the two dataframes and use `group_split()` to turn them into a list of dataframes, which we pass into the `make_location()` function.
 
@@ -371,7 +376,7 @@ Now collect the travel time data for each venue and each tract centroid.
 
 ```{r}
 time_requests = venue_locations |> #sample_n(1) |> 
-  filter(id == "Sepulveda Basin Recreation Area") |> 
+  # filter(id == "Sepulveda Basin Recreation Area") |> 
   expand_grid(tract = map_chr(tract_ids, pluck)) |> 
   # select(id) |> 
   pmap(\(id, coords, tract) make_search(id = str_c(id, " | ", tract), 
@@ -475,6 +480,18 @@ saveRDS(travel_times2, here("data", str_c("travel_times_", today(),".rds")))
 ```
 
 ```{r}
+glimpse(travel_times2)
+```
+
+Calculate difference between driving and public transport travel times
+
+```{r}
+travel_times2
+```
+
+
+
+```{r}
 travel_times2 |> #glimpse()
   filter(str_detect(venue_id, "Sepulveda Basin Recreation Area")) |>
   group_by(transportation) |> 
@@ -539,6 +556,46 @@ driving_routes |>
        x = "Travel Time (mins)",
        y = "Density")+
   theme_minimal()
+```
+
+```{r}
+travel_times = readRDS(here("data", str_c("travel_times_", "2025-07-24",".rds")))
+```
+
+```{r}
+# Pivot travel time and distance into separate columns
+travel_times |> #glimpse()
+  mutate(venue = str_extract(venue_id, ".+(?=\\|)")) |> 
+  pivot_wider(id_cols = c(venue, arrival_time, walking_time, pt_change_delay), names_from = transportation, values_from = c(time_mins, distance_mi))
+  group_by(transportation) |> 
+  mutate(time_mins = if_else(transportation == "driving", time_mins*1.2, time_mins),
+         mean_time = mean(time_mins))
+```
+
+
+```{r}
+travel_times |> #glimpse()
+  filter(str_detect(venue_id, "Sepulveda Basin Recreation Area")) |>
+  group_by(transportation) |> 
+  mutate(time_mins = if_else(transportation == "driving", time_mins*1.2, time_mins),
+         mean_time = mean(time_mins)) |> 
+  ungroup() |> 
+  filter(time_mins < 400) |> 
+  ggplot()+
+  geom_histogram(aes(x = time_mins, fill = transportation, y = stat(width*density)), 
+                 binwidth = 5,
+                 colour = "white")+
+  geom_vline(aes(xintercept = mean_time, colour = transportation), linewidth = 2)+
+  scale_x_continuous(breaks = seq(0, 240, 30))+
+  scale_y_continuous(breaks = scales::breaks_pretty(), labels = scales::percent)+
+  # scale_alpha_discrete(breaks = c("driving", "public_transport"), range = c(1, .025))+
+  # geom_text(aes(x = mean_time, y = .3, label = round(mean_time, 1)))+
+  labs(title = "Distribution of Travel Times to Sepulveda Basin Recreation Area",
+       x = "Travel Time (mins)")+
+  # facet_grid(rows = vars(transportation), scales = "free_y", axes = "all_x",
+  #            switch = "y")+
+  theme_minimal()+
+  theme()
 ```
 
 

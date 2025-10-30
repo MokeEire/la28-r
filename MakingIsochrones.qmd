@@ -55,6 +55,7 @@ nhgis_shp = st_read(nhgis_shp_file) |>
   st_transform(crs = "EPSG:4326")
 
 ```
+
 What's the total population and area of LA County?
 
 ```{r}
@@ -100,6 +101,14 @@ ggplot(nhgis_la_shp_subset)+
   theme_void()
 ```
 
+What's the population and area of this subset?
+
+```{r}
+nhgis_la_shp_subset |> 
+  summarise(across(c(POPULATION, AREALAND_SQKM, AREALAND_SQMI), sum))
+```
+
+
 Let's look at LA's population by census tract
 
 ```{r}
@@ -111,14 +120,6 @@ ggplot(nhgis_la_shp_subset)+
                                                              legend.key.height = unit(.25, "cm"))))+
   theme_void()
 
-```
-
-What is the total population for this subset?
-
-```{r}
-nhgis_la_shp_subset |> 
-  st_drop_geometry() |> 
-  summarise(total_pop = sum(POPULATION))
 ```
 
 
@@ -187,7 +188,7 @@ glimpse(venues_distinct_addresses)
 
 ```{r}
 # Plot the venues over the LA map
-venues_distinct_addresses |> 
+venues |> 
   ggplot(aes(geometry = venue_geometry)) +
   geom_sf(data = nhgis_la_shp_subset, aes(geometry = geometry), colour = "#333")+
   geom_sf(colour = "blue", size = 3)+
@@ -200,9 +201,57 @@ venues_distinct_addresses |>
 Join census tract information to the venues
 
 ```{r}
-venues_tracts = st_join(venues_distinct_addresses, nhgis_la_shp_subset, join = st_within)
+# Use 
+venues_tracts = st_join(venues, nhgis_la_shp_subset, join = st_within)
 
 distinct(venues_tracts, TRACTA, .keep_all = T)
+```
+
+## TwentyEight by '28
+
+```{r}
+twentyeight_folder = here("data", "TwentyEightBy28")
+
+twentyeight_df = twentyeight_folder |>
+  fs::dir_ls(recurse = TRUE, regexp = 'shp$') |>
+  map(st_read) |> 
+  map(st_transform, crs = "EPSG:4326") |>
+  list_rbind()
+
+twentyeight_df |> 
+  ggplot()+
+  geom_sf(aes(geometry = geometry))
+```
+
+```{r}
+glimpse(twentyeight_df)
+```
+
+
+```{r}
+twentyeight_df |> 
+  count(NAME)
+```
+
+
+
+## Measure M Projects
+
+```{r}
+measurem_folder = here("data", "MeasureM")
+
+measurem_df = measurem_folder |>
+  fs::dir_ls(recurse = TRUE, regexp = 'shp$') |>
+  map(st_read) |> 
+  map(st_transform, crs = "EPSG:4326") |>
+  list_rbind()
+
+measurem_df |> glimpse()
+
+measurem_df |> 
+  ggplot()+
+  geom_sf(aes(geometry = geometry, colour=Mode2))+
+  theme_minimal()
 ```
 
 # Isochrones
@@ -214,19 +263,22 @@ Next, put them into a list column which works with the `make_search()` function.
 
 ```{r}
 # Calculate lat/lon and put them in a list column
-venues_iso = venues_distinct_addresses |> 
+venues_iso = venues |> 
   mutate(lat = st_coordinates(venue_geometry)[,2], 
          lng = st_coordinates(venue_geometry)[,1],
          coords = map2(lat, lng, \(lat, lng) list(lat = lat, lng = lng))) |>
-  select(id = venue_simplified, coords) |> 
+  select(id = venue_location, coords) |> 
   st_drop_geometry()
 ```
 
 Create a combination of venues and travel times for isochrone requests
 
 ```{r}
+
 iso_request_df = venues_iso |> 
-  expand_grid(travel_time = 60*c(30, 60, 90, 120))
+  expand_grid(travel_time = 60*c(30, 60, 90, 120),
+              date = today()+days(4:7),
+              time_of_day = c(9, 11, 13))
 
 glimpse(iso_request_df)
 ```
@@ -234,13 +286,35 @@ glimpse(iso_request_df)
 Create a search object for each venue: public transport
 
 ```{r}
+next_weekday = function(date = today(), time_in_hrs = 9, format_as_text = T){
+  dow = wday(date, week_start = 1)
+  
+  if(dow == 5){
+    new_date = date + days(3)
+  } else if(dow == 6){
+    new_date = date + days(2)
+  } else {
+    new_date = date + days(1)
+  }
+  
+  new_date_tz = force_tz(new_date+hours(time_in_hrs), tzone = "America/Los_Angeles")
+  
+  if(format_as_text){
+    format_ISO8601(new_date_tz, usetz=T)
+  } else {
+    new_date_tz
+  }
+  
+}
+
+
 venues_iso_search = iso_request_df |> 
-    pmap(\(id, coords, travel_time) make_search(id = str_c(id, "_", travel_time), 
+    pmap(\(id, coords, travel_time, date, time_of_day) make_search(id = str_c(id, "_", travel_time), 
                                       travel_time = travel_time, 
-                                      arrival_time = "2024-12-18T09:00:00-08:00", 
+                                      arrival_time = next_weekday(date, time_in_hrs = time_of_day), 
                                       coords = coords, 
                                       transportation = list(type = "public_transport", 
-                                                            walking_time=20*60, 
+                                                            walking_time=15*60,
                                                             pt_change_delay = 120),
                                       level_of_detail = list(scale_type = "simple", level = "medium")))
 ```
@@ -249,9 +323,9 @@ Create a search object for each venue: driving
 
 ```{r}
 venues_iso_search_drive = iso_request_df |> 
-    pmap(\(id, coords, travel_time) make_search(id = str_c(id, "_", travel_time), 
+    pmap(\(id, coords, travel_time, time_of_day) make_search(id = str_c(id, "_", travel_time), 
                                       travel_time = travel_time, 
-                                      arrival_time = "2024-12-18T09:00:00-08:00", 
+                                      arrival_time = next_weekday(date, time_in_hrs = time_of_day), 
                                       coords = coords, 
                                       transportation = list(type = "driving"),
                                       level_of_detail = list(scale_type = "simple", level = "medium")))
@@ -271,7 +345,9 @@ isochrones_drive_df = readRDS(here("data", str_c("isochrones_drive", "2024-12-16
 ### Public Transport
 
 ```{r}
+tictoc::tic("API requests for Transit")
 isochrones_transit_results = map(venues_iso_search, time_map_sf)
+tictoc::toc()
 
 isochrones_transit_df = list_rbind(isochrones_transit_results, names_to = "id")
 
@@ -312,19 +388,19 @@ isochrones_transit_df |>
 # 1. Join on venues
 isochrones_transit_venues = isochrones_transit_df |> 
   # filter(venue == sample(venue, 1)) |> 
-  inner_join(venue_addresses, by = "venue") |> 
-  distinct(id, venue_simplified, travel_time, arrival_time, transportation, walking_time, pt_change_delay, group, geometry) |> 
-  inner_join(venues_distinct_addresses, by = "venue_simplified") |> 
+  # inner_join(venue_addresses, by = "venue") |> 
+  # distinct(id, venue_location, travel_time, arrival_time, transportation, walking_time, pt_change_delay, group, geometry) |> 
+  inner_join(venues, by = c("venue" = "venue_location")) |> 
   # select(-venue.x) |> 
   # rename(venue = venue.y) |> 
   mutate(travel_time_mins = factor(travel_time/60))|> 
   arrange(desc(travel_time))
 
-isochrones_transit_venues = isochrones_transit_df |> 
-  inner_join(venues_distinct_addresses, by = "venue") |> 
-  select(-venue) |>
-  mutate(travel_time_mins = factor(travel_time/60))|> 
-  arrange(desc(travel_time))
+# isochrones_transit_venues = isochrones_transit_df |> 
+#   inner_join(venues_distinct_addresses, by = "venue") |> 
+#   select(-venue) |>
+#   mutate(travel_time_mins = factor(travel_time/60))|> 
+#   arrange(desc(travel_time))
 
 glimpse(isochrones_transit_venues)
 ```
@@ -371,7 +447,7 @@ To make this data accessible in Svelte, I need to convert it to GeoJSON
 
 ```{r}
 sf::st_as_sf(isochrones_transit_df) |> 
-  sf::st_write(here("data", "isochronesTransit2025.geojson"))
+  sf::st_write(here("data", str_c("isochronesTransit", today(), ".geojson.json")), driver = "GeoJSON")
 
 sf::st_as_sf(isochrones_drive_df) |> 
   sf::st_write(here("data", "isochronesDrive.geojson"))
@@ -387,7 +463,8 @@ isochrone_legend = scale_fill_brewer(name = "Mins", type = "div", palette = 8, d
                                                theme = theme(legend.key.width = unit(.75, "cm"), legend.text.position = "bottom",
                                                              legend.key.height = unit(.5, "cm"), legend.title.position = "right")))
 isochrone_plots = st_as_sf(isochrones_transit_venues) |> 
-  split(isochrones_transit_venues$venue_simplified) |> 
+  mutate(time = hour(ymd_hms(arrival_time, tz = "America/Los_Angeles"))) |> 
+  split(isochrones_transit_venues$venue) |> 
   map(\(df){
     # Single venue, 3-tier isochrone
   ggplot(df)+
@@ -399,10 +476,11 @@ isochrone_plots = st_as_sf(isochrones_transit_venues) |>
   # scale_fill_steps2(breaks = c(30, 60, 90), n.breaks = 3, nice.breaks = F)+
   isochrone_legend+
   labs(title = "How long does it take to get to ________ using public transit?",
-       subtitle = unique(df$venue_simplified),
+       subtitle = unique(df$venue),
        caption = "Allows for 20 mins walking to/between transit stops\n\nSource: Traveltime API")+
+      facet_wrap(~time, nrow=1)+
   theme_void()
-  }) |> set_names(unique(isochrones_transit_venues$venue_simplified))
+  }) |> set_names(unique(isochrones_transit_venues$venue))
   
 isochrone_plots
 ```
@@ -470,7 +548,7 @@ isochrones_time_union  |>
   arrange(desc(travel_time)) |>
   ggplot()+
   geom_sf(aes(geometry=geometry, fill = travel_time_mins), alpha = .9)+
-  geom_sf_text(aes(label = scales::percent(pop_pct)), size = 2, colour = "white", nudge_y = .01)+
+  # geom_sf_text(aes(label = scales::percent(pop_pct)), size = 2, colour = "white", nudge_y = .01)+
   isochrone_legend+
   theme_void()
 ```
@@ -567,7 +645,7 @@ Now try to do the same for all the isochrones
 isochrones_union = isochrones_transit_venues |> 
   mutate(travel_time_mins = travel_time/60, .after = "travel_time") |> 
   # Convert multiple individual polygons to single multipolygon
-  group_by(id, venue_simplified, venues, travel_time, travel_time_mins, 
+  group_by(id, venue, venues, travel_time, travel_time_mins, 
            arrival_time, transportation, walking_time, pt_change_delay) |>
   summarise(geometry = st_union(geometry), .groups = "drop") |>
   st_as_sf()
@@ -583,34 +661,92 @@ isochrones_pop_joined = isochrones_union |>
 # Calculate the population within each isochrone
 isochrones_pop_pct = isochrones_pop_joined |> 
   st_drop_geometry() |> 
-  group_by(venue_simplified, travel_time, travel_time_mins, arrival_time, transportation, walking_time, pt_change_delay) |>
+  group_by(venue, venues, travel_time, travel_time_mins, arrival_time, transportation, walking_time, pt_change_delay) |>
   summarise(pop = sum(POPULATION),
-            pop_pct = pop/sum(nhgis_la_shp_subset$POPULATION), .groups = "drop")
+            pop_pct = pop/sum(nhgis_la_shp_subset$POPULATION), .groups = "drop") |> 
+  mutate(arrival_time_ts = ymd_hms(arrival_time, tz = "America/Los_Angeles"),
+         weekday = wday(arrival_time_ts, label = T),
+         time_of_day = factor(hour(arrival_time_ts)))
 
 glimpse(isochrones_pop_pct)
 ```
+
+```{r}
+isochrones_pop_pct |> 
+  select(venue, arrival_time_ts, weekday, time_of_day, travel_time_mins, pop, pop_pct) |> 
+  arrange(venue, travel_time_mins, time_of_day, weekday) |> 
+  View("Isochrones Sorted")
+```
+
+```{r}
+isochrones_pop_pct |> 
+  select(venue, arrival_time_ts, weekday, time_of_day, travel_time_mins, pop, pop_pct) |> 
+  arrange(venue, travel_time_mins, time_of_day, weekday) |> 
+  pivot_wider(id_cols = c(venue, time_of_day, travel_time_mins, pop), names_from = weekday, values_from = pop_pct) |> 
+  View("Isochrones Pivoted")
+```
+
+
+Add Colour legend
+
+```{r}
+isochrone_legend_colour = scale_colour_brewer(name = "Mins", type = "div", palette = 8, direction = -1, 
+                        guide = guide_legend(direction = "horizontal", position = "bottom",
+                                               theme = theme(legend.key.width = unit(.75, "cm"), legend.text.position = "bottom",
+                                                             legend.key.height = unit(.5, "cm"), legend.title.position = "right")))
+```
+
+
+Plot population percentage for each venue by weekday and time of day
+
+```{r}
+isochrones_pop_pct |> 
+  split(isochrones_pop_pct$venue) |> 
+  map(\(df){
+  ggplot(df, aes(x = travel_time_mins, y = pop_pct, colour = time_of_day))+
+  geom_point()+
+      geom_line()+
+      # geom_col(aes(x = weekday, y = pop_pct, fill = time_of_day))+
+      labs(title = str_c("How accessible is ", unique(df$venue), " by public transit?"),
+           x = "Travel Time (mins)", y = "% of LA Population")+
+      scale_fill_viridis_d()+
+      scale_x_continuous(breaks = c(30, 60, 90, 120), labels = c("< 30", "30–60", "60–90", "90–120"), expand = expansion(add = .5))+
+      scale_y_continuous(labels = scales::percent)+
+  # facet_grid(rows = vars(travel_time_mins), cols = vars(time_of_day), scales = "free_y")+
+      # facet_wrap(~travel_time_mins, ncol=1, scales = "free_y")+
+  theme_minimal()
+  })
+```
+
+Weekday doesn't have any effect on the isochrones, but time of day does.
+Interestingly, LA Live is more accessible within 90 mins at 9am than 1pm, but more accessible within 30 mins at 1pm than 9am.
+
 
 Check some summary stats of population within range for each travel time
 
 ```{r}
 isochrones_pop_pct |> 
-  group_by(travel_time_mins) |> 
+  group_by(venue, travel_time_mins) |> 
   summarise(
     min = min(pop_pct),
     mean = mean(pop_pct),
     median = median(pop_pct),
-    max = max(pop_pct)
-  )
+    max = max(pop_pct),
+    sd = sd(pop_pct),
+    .groups = "drop"
+  ) |> 
+  mutate(across(c(min:sd), \(x) round(x, 4)))
 ```
 
 ```{r}
 isochrones_pop_pct |> 
+  filter(weekday == "Tue") |> 
   mutate(travel_time_fct = factor(travel_time_mins, labels = str_c("< ", c(30,60,90,120), " mins")),
          travel_time_fct = fct_rev(travel_time_fct)) |> 
-  ggplot(aes(x = pop_pct, y = travel_time_fct))+
+  ggplot(aes(x = pop_pct, y = time_of_day))+
   geom_boxplot(aes(x = pop_pct, fill = travel_time_fct), show.legend=F)+
   geom_point(aes())+
-  stat_summary(fun = "median", geom = "label", mapping=aes(label = scales::percent(after_stat(x))), show.legend = F)+
+  stat_summary(fun = "median", geom = "label", mapping=aes(label = scales::percent(after_stat(x), accuracy = 1)), show.legend = F)+
   scale_x_continuous(labels = scales::percent)+
   scale_colour_brewer(name = NULL, type = "div", palette = 8, 
                         guide = guide_legend(direction = "horizontal", position = "bottom",reverse = T,
@@ -621,6 +757,7 @@ isochrones_pop_pct |>
   labs(title = "How accessible are Olympic venues by transit?",
        subtitle = "% of LA population living within each travel time of Olympic venues",
        x = NULL, y = NULL)+
+  facet_wrap(~travel_time_fct, ncol=1, strip.position = "left", labeller = label_wrap_gen(width = 20),  )+
   theme_minimal(base_size = 12)+
   theme(panel.grid.major.y = element_blank(),
         axis.text.y.left = element_text(size = 12),
@@ -634,15 +771,15 @@ Create a stacked bar chart that displays the proportion of the population that c
 
 ```{r}
 travel_time_stacked = isochrones_pop_pct |> 
-  filter(travel_time_mins <= 120) |> 
-  group_by(venue_simplified) |> 
-  mutate(max_pct = max(pop_pct)) |> 
+  filter(travel_time_mins <= 120, weekday == "Tue") |> 
+  group_by(venue) |> 
+  mutate(max_pct = max(pop_pct, na.rm=T)) |> 
   ungroup() |> 
-  arrange(desc(max_pct), venue_simplified, desc(travel_time_mins)) |> 
+  arrange(desc(max_pct), venue, desc(travel_time_mins)) |> 
   mutate(travel_time_fct = factor(travel_time_mins, 
                                   levels = c(30, 60, 90, 120, 150), 
                                   labels = c("< 30", "30–60", "60–90", "90–120", "120–150")),
-         venue_fct = fct_inorder(factor(venue_simplified))) |> 
+         venue_fct = fct_inorder(factor(venue))) |> 
   ggplot(aes(x = pop_pct))+
   geom_col(aes(y = venue_fct, fill = travel_time_fct), colour = "white", position = position_identity())+
   geom_text(aes(x = max_pct, y = venue_fct, label = scales::percent(max_pct, accuracy = 1)),
@@ -659,8 +796,8 @@ travel_time_stacked = isochrones_pop_pct |>
 
 travel_time_stacked
 
-travel_time_stacked |> 
-  ggsave(filename = here("output", "travel_time_stacked.png"), width = 900, height = 600, units = "px", scale = 2.5)
+# travel_time_stacked |> 
+#   ggsave(filename = here("output", "travel_time_stacked.png"), width = 900, height = 600, units = "px", scale = 2.5)
 ```
 
 
@@ -672,8 +809,8 @@ Write the isochrone data to GeoJSON
 
 ```{r}
 isochrones_pop_pct |> 
-  select(venue_simplified, travel_time, arrival_time, pop, pop_pct) |> 
-  right_join(isochrones_union, by = c("venue_simplified", "travel_time", "arrival_time")) |> 
+  select(venue, travel_time, arrival_time, time_of_day, pop, pop_pct) |> 
+  right_join(isochrones_union, by = c("venue", "travel_time", "arrival_time")) |> 
   # right_join(st_drop_geometry(select(venues, venue, address)), by = "address") |> glimpse()
   st_write(here("data", "isochronesTransit.geojson.json"), driver = "GeoJSON", append = F)
 
