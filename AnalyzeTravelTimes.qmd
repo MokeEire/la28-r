@@ -22,6 +22,7 @@ library(tidyverse)
 library(sf)
 library(traveltimeR)
 library(jsonlite)
+library(janitor)
 
 # Load custom functions
 source(here("R", "fct-traveltime.R"))
@@ -117,7 +118,7 @@ What are the average travel times for each venue?
 ```{r}
 travel_times_pivot |> 
   group_by(venue) |> 
-  summarise(across(contains("_time"), list(min = min, mean = mean, median = median, max = max), na.rm = T))
+  summarise(across(c(driving, public_transport), list(min = min, mean = mean, median = median, max = max), na.rm = T))
 
 glimpse(travel_times_pivot)
 ```
@@ -147,6 +148,50 @@ travel_times_pivot |>
   summarise(across(time_diff, list(min = min, mean = mean, median = median, max = max), na.rm = T))
   
 ```
+
+How much longer does it take via transit than driving to each venue?
+
+```{r}
+travel_times_transit_factor = travel_times_pivot |> 
+  mutate(transit_time_factor = public_transport/driving,
+         transit_time_factor_int = round_half_up(public_transport/driving, 0), 
+         transit_time_factor_fct = str_c(transit_time_factor_int, "x"),
+         .after = "public_transport")
+```
+
+```{r}
+df = travel_times_transit_factor |> 
+  filter(venue == "Convention Center Downtown Los Angeles") |> 
+  inner_join(nhgis_la_shp_subset, by = c("id" = "TRACTA")) |>
+  inner_join(venues, by = c("venue" = "venue_location"))
+
+ggplot(df)+
+  geom_sf(data = nhgis_la_shp_subset, aes(geometry=geometry), fill = "grey", colour = NA, alpha = .8)+
+  geom_sf(aes(geometry = geometry, fill = transit_time_factor), colour = NA, alpha = .8)+
+  geom_sf(aes(geometry = venue_geometry), alpha = .5, size = 1)+
+  # geom_sf(data = nhgis_top_pop, aes(geometry = geometry), colour = "blue", fill = NA)+
+  # scale_fill_fermenter(breaks = c(29.999, 59.999, 89.999), labels = ~round(.x, 0), type = "div", palette = 8)+
+  # scale_fill_steps2(breaks = c(1, 2, 3, 4, 5), colours = viridis::magma(5))+
+  # scale_fill_viridis_c(direction = -1, limits = c(1, NA), breaks = c(1, 2, 3, 4, 5), na.value = "grey")+
+  scale_fill_viridis_b(direction = -1, na.value = "grey", breaks = c(1, 2, 3, 4, 5), limits = c(.5, NA))+
+  labs(title = "How does public transit compare to driving?",
+       subtitle = unique(df$venue),
+       caption = "Allows for 20 mins walking to/between transit stops\n\nSource: Traveltime API")+
+  theme_void()
+```
+
+```{r}
+travel_times_transit_factor |> 
+  filter(venue == "Convention Center Downtown Los Angeles") |> 
+  inner_join(nhgis_la_shp_subset, by = c("id" = "TRACTA")) |> 
+  group_by(transit_time_factor_fct) |> 
+  summarise(POPULATION = sum(POPULATION, na.rm = T))
+ggplot()+
+  geom_bar(aes(x = POPULATION, Y = transit_time_factor_int))
+```
+
+
+
 
 ```{r}
 tt_plot = travel_times_pivot |> 
